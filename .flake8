@@ -1,0 +1,4 @@
+[flake8]
+# Configurations to resolve conflicts with Black formatter
+max-line-length = 88
+extend-ignore = E203
