@@ -1,7 +1,11 @@
 # Core dev tools
 pre-commit==4.5.1
 
-# Linters & Formatters
-black==26.1.0
-isort==7.0.0
-flake8==7.3.0
+# Linter + formatter (single binary; replaces black + isort + flake8).
+# Pinned to the exact version used in .pre-commit-config.yaml and CI so the
+# three agree byte-for-byte.
+ruff==0.15.10
+
+# Optional type checker / language server. Pinned so editor, CLI, and LLM-driven
+# workflows can share the same diagnostics when they choose to run it.
+basedpyright==1.39.0
