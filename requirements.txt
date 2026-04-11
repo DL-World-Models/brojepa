@@ -1,0 +1,11 @@
+# Runtime dependencies for the mnist-math research codebase.
+#
+# Upper bounds are loose during development. Pin
+# harder when we freeze for the workshop submission.
+torch>=2.3
+torchvision>=0.18
+torchmetrics>=1.4
+tqdm>=4.66
+
+# Optional, lazy-imported (only needed if you pass --wandb to train_baseline):
+# wandb>=0.17

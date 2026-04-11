@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Project artifacts
+data/
+wandb/
+*.pt
+*.pth
+
+# Run artifacts: keep the small metadata (config.json, history.json) so that
+# sanity-check evidence is committable, but ignore the multi-MB checkpoints.
+# (*.pt is already ignored above, which is the heavy stuff.)
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
