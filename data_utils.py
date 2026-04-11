@@ -1,18 +1,21 @@
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import datasets, transforms
 import random
+
+import torch
+from torch.utils.data import DataLoader, Dataset
+from torchvision import datasets, transforms
+
 
 # ARITHMETIC DATASET CLASS
 class ArithmeticDataset(Dataset):
     """
     getitem returns: context_img, ctx_label, operation, target_img, target_label
     """
+
     def __init__(self, base_dataset, operations, transform=None):
         self.base_dataset = base_dataset
 
         # CURRENTLY ONLY SUPPORTS ADDITION/SUBTRACTION
-        self.operations = operations # e.g. [1, 2, -1, -2]
+        self.operations = operations  # e.g. [1, 2, -1, -2]
         self.transform = transform
 
         # Pre-index labels to find target images quickly
@@ -56,27 +59,30 @@ class ArithmeticDataset(Dataset):
             "ctx_label": torch.tensor(ctx_label),
             "op": torch.tensor(op_val, dtype=torch.float32),
             "tgt_img": tgt_img,
-            "tgt_label": torch.tensor(tgt_label)
+            "tgt_label": torch.tensor(tgt_label),
         }
-    
 
-def get_arithmetic_dataloader(dataset_name="MNIST", batch_size=64, ops=[1, 2, -1, -2], is_train=True):
+
+def get_arithmetic_dataloader(
+    dataset_name="MNIST", batch_size=64, ops=[1, 2, -1, -2], is_train=True
+):
     """
     Factory function to easily create loaders for MNIST or EMNIST.
     """
     # Standard MNIST/EMNIST normalization constants
-    t = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.1307,), (0.3081,))
-    ])
+    t = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    )
 
     if dataset_name.upper() == "MNIST":
-        base = datasets.MNIST(root='./data', train=is_train, download=True)
+        base = datasets.MNIST(root="./data", train=is_train, download=True)
     elif dataset_name.upper() == "EMNIST":
-        base = datasets.EMNIST(root='./data', split='digits', train=is_train, download=True)
+        base = datasets.EMNIST(
+            root="./data", split="digits", train=is_train, download=True
+        )
     else:
         raise ValueError("Only MNIST and EMNIST are currently supported.")
 
     arith_ds = ArithmeticDataset(base, operations=ops, transform=t)
-    
+
     return DataLoader(arith_ds, batch_size=batch_size, shuffle=is_train)
