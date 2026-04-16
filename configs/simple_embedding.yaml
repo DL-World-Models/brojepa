@@ -1,6 +1,7 @@
 data:
   dataset: MNIST
   ops: [1, 2, -1, -2]
+  test_ops: [-1, -2]  # Subset of seen ops for embedding mode
   batch_size: 128
   num_workers: 0
   data_root: ./data

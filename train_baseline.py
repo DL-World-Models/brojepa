@@ -198,9 +198,16 @@ def main() -> None:
         print(f"[overfit] snapshotted {config.run.overfit} samples (train == eval set)")
 
     # ---- model / optim ---- #
+    # For embedding mode, include all ops the model might see (train + test)
+    # For linear/fourier modes, only training ops needed (they generalize to any value)
+    if config.model.op_embedding_type == "embedding":
+        model_ops = sorted(list(set(config.data.ops) | set(test_ops)))
+    else:
+        model_ops = config.data.ops
+    
     if config.model.name == "resnet18":
         model = ResNet18LateFusion(
-            ops=config.data.ops,
+            ops=model_ops,
             num_classes=config.model.num_classes,
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
@@ -208,7 +215,7 @@ def main() -> None:
         ).to(device)
     elif config.model.name == "simple_fc2":
         model = SimpleFCLateFusion(
-            ops=config.data.ops,
+            ops=model_ops,
             num_classes=config.model.num_classes,
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
