@@ -55,6 +55,33 @@ All runs go through train_baseline.py and follow this order:
 6. Build selected model from model.name.
 7. Train, evaluate each epoch, and save artifacts.
 
+## Testing
+
+All code has backward compatibility tests. Before committing or merging changes, run:
+
+```bash
+pytest tests/ -v
+```
+
+See [TESTING.md](TESTING.md) for detailed testing guide including how to:
+- Run tests for specific modules
+- Run with coverage reports
+- Run tests in watch mode
+- Add new tests
+
+Quick examples:
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run only model tests
+pytest tests/test_models.py -v
+
+# Run with coverage
+pytest tests/ --cov=models --cov=utils --cov=data_pipeline --cov-report=html
+```
+
 ## Config system
 
 Config schema is split into four sections:

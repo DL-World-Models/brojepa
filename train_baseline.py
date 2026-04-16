@@ -36,7 +36,7 @@ from tqdm import tqdm
 
 from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
 from utils.experiment_config import apply_cli_overrides, load_experiment_config
-from models import ResNet18LateFusion, SimpleFCLateFusion
+from models import ResNet18LateFusion, SimpleFCLateFusion, SimpleFCFourier
 from utils.common import get_device, set_seed
 
 
@@ -116,6 +116,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", type=str, default="configs/resnet_baseline.yaml")
     p.add_argument("--dataset", type=str, default=None, choices=["MNIST", "EMNIST"])
     p.add_argument("--ops", type=int, nargs="+", default=None)
+    p.add_argument("--test-ops", type=int, nargs="+", default=None)
     p.add_argument("--model-name", type=str, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--data-root", type=str, default=None)
@@ -158,6 +159,9 @@ def main() -> None:
     (run_dir / "config.json").write_text(json.dumps(config_blob, indent=2))
 
     # ---- data ---- #
+    # Use test_ops if specified, otherwise default to training ops
+    test_ops = config.data.test_ops if config.data.test_ops else config.data.ops
+    
     train_loader = get_arithmetic_dataloader(
         dataset_name=config.data.dataset,
         batch_size=config.data.batch_size,
@@ -169,7 +173,7 @@ def main() -> None:
     test_loader = get_arithmetic_dataloader(
         dataset_name=config.data.dataset,
         batch_size=config.data.batch_size,
-        ops=config.data.ops,
+        ops=test_ops,
         is_train=False,
         data_root=config.data.data_root,
         num_workers=config.data.num_workers,
@@ -207,10 +211,17 @@ def main() -> None:
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
         ).to(device)
+    elif config.model.name == "simple_fc_fourier":
+        model = SimpleFCFourier(
+            ops=config.data.ops,
+            num_classes=config.model.num_classes,
+            op_embed_dim=config.model.op_embed_dim,
+            mlp_hidden=config.model.mlp_hidden,
+        ).to(device)
     else:
         raise ValueError(
             f"Unknown model.name='{config.model.name}'. "
-            "Supported: ['resnet18', 'simple_fc2']"
+            "Supported: ['resnet18', 'simple_fc2', 'simple_fc_fourier']"
         )
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[model] parameters={n_params:,}")
@@ -275,7 +286,12 @@ def main() -> None:
         },
         str(run_dir / "last.pt"),
     )
-    print(f"[done] best test acc={best_test_acc:.4f}  artifacts in {run_dir}")
+    ops_note = (
+        f" (unseen ops: {test_ops})"
+        if test_ops != config.data.ops
+        else ""
+    )
+    print(f"[done] best test acc={best_test_acc:.4f}{ops_note}  artifacts in {run_dir}")
 
 
 if __name__ == "__main__":

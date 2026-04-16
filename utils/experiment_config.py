@@ -11,6 +11,7 @@ import yaml
 class DataConfig:
     dataset: str = "MNIST"
     ops: list[int] = field(default_factory=lambda: [1, 2, -1, -2])
+    test_ops: list[int] | None = None  # If None, defaults to ops
     batch_size: int = 128
     num_workers: int = 0
     data_root: str = "./data"
@@ -56,6 +57,11 @@ class ExperimentConfig:
         data = DataConfig(
             dataset=data_raw.get("dataset", "MNIST"),
             ops=[int(v) for v in data_raw.get("ops", [1, 2, -1, -2])],
+            test_ops=(
+                [int(v) for v in data_raw.get("test_ops")]
+                if data_raw.get("test_ops")
+                else None
+            ),
             batch_size=int(data_raw.get("batch_size", 128)),
             num_workers=int(data_raw.get("num_workers", 0)),
             data_root=data_raw.get("data_root", "./data"),
@@ -107,6 +113,7 @@ def apply_cli_overrides(
     mapping: dict[str, tuple[str, str]] = {
         "dataset": ("data", "dataset"),
         "ops": ("data", "ops"),
+        "test_ops": ("data", "test_ops"),
         "batch_size": ("data", "batch_size"),
         "num_workers": ("data", "num_workers"),
         "data_root": ("data", "data_root"),

@@ -9,3 +9,8 @@ ruff==0.15.10
 # Optional type checker / language server. Pinned so editor, CLI, and LLM-driven
 # workflows can share the same diagnostics when they choose to run it.
 basedpyright==1.39.0
+
+# Testing and test coverage
+pytest==8.0.0
+pytest-cov==4.1.0
+pytest-xdist==3.5.0

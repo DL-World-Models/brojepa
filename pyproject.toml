@@ -13,8 +13,20 @@ ignore = ["E203"]
 [tool.ruff.format]
 # ruff format is black-compatible by default; nothing to override.
 
+# ---------------------------------------------------------------------------# pytest configuration
 # ---------------------------------------------------------------------------
-# basedpyright (editor-side type-check signal). Not enforced in pre-commit or
+[tool.pytest.ini_options]
+testpaths = ["tests/"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "--strict-markers -ra"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]
+
+# ---------------------------------------------------------------------------# basedpyright (editor-side type-check signal). Not enforced in pre-commit or
 # CI — this is a diagnostics channel for editors, not a gate.
 #
 # Strategy: strict mode with "unknown type" noise downgraded to warning. Real
