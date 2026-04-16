@@ -1,0 +1,24 @@
+data:
+  dataset: MNIST
+  ops: [1, 2, -1, -2]
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  name: resnet18
+  num_classes: 10
+  op_embed_dim: 32
+  mlp_hidden: 256
+  op_embedding_type: fourier  # Fourier embedding for smooth generalization
+
+optim:
+  lr: 1e-3
+  weight_decay: 1e-4
+
+run:
+  epochs: 10
+  seed: 42
+  runs_dir: runs/baseline
+  tag: resnet-fourier-ops
+  overfit: 0

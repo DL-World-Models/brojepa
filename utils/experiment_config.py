@@ -23,6 +23,7 @@ class ModelConfig:
     num_classes: int = 10
     op_embed_dim: int = 32
     mlp_hidden: int = 256
+    op_embedding_type: str = "embedding"  # "embedding", "linear", or "fourier"
 
 
 @dataclass(slots=True)
@@ -71,6 +72,7 @@ class ExperimentConfig:
             num_classes=int(model_raw.get("num_classes", 10)),
             op_embed_dim=int(model_raw.get("op_embed_dim", 32)),
             mlp_hidden=int(model_raw.get("mlp_hidden", 256)),
+            op_embedding_type=str(model_raw.get("op_embedding_type", "embedding")),
         )
         optim = OptimConfig(
             lr=float(optim_raw.get("lr", 1e-3)),
@@ -121,6 +123,7 @@ def apply_cli_overrides(
         "num_classes": ("model", "num_classes"),
         "op_embed_dim": ("model", "op_embed_dim"),
         "mlp_hidden": ("model", "mlp_hidden"),
+        "op_embedding_type": ("model", "op_embedding_type"),
         "lr": ("optim", "lr"),
         "weight_decay": ("optim", "weight_decay"),
         "epochs": ("run", "epochs"),

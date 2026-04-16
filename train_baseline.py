@@ -36,7 +36,7 @@ from tqdm import tqdm
 
 from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
 from utils.experiment_config import apply_cli_overrides, load_experiment_config
-from models import ResNet18LateFusion, SimpleFCLateFusion, SimpleFCFourier
+from models import ResNet18LateFusion, SimpleFCLateFusion
 from utils.common import get_device, set_seed
 
 
@@ -126,6 +126,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-classes", type=int, default=None)
     p.add_argument("--op-embed-dim", type=int, default=None)
     p.add_argument("--mlp-hidden", type=int, default=None)
+    p.add_argument("--op-embedding-type", type=str, default=None)
     p.add_argument("--num-workers", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--runs-dir", type=str, default=None)
@@ -203,6 +204,7 @@ def main() -> None:
             num_classes=config.model.num_classes,
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
+            op_embedding_type=config.model.op_embedding_type,
         ).to(device)
     elif config.model.name == "simple_fc2":
         model = SimpleFCLateFusion(
@@ -210,18 +212,12 @@ def main() -> None:
             num_classes=config.model.num_classes,
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
-        ).to(device)
-    elif config.model.name == "simple_fc_fourier":
-        model = SimpleFCFourier(
-            ops=config.data.ops,
-            num_classes=config.model.num_classes,
-            op_embed_dim=config.model.op_embed_dim,
-            mlp_hidden=config.model.mlp_hidden,
+            op_embedding_type=config.model.op_embedding_type,
         ).to(device)
     else:
         raise ValueError(
             f"Unknown model.name='{config.model.name}'. "
-            "Supported: ['resnet18', 'simple_fc2', 'simple_fc_fourier']"
+            "Supported: ['resnet18', 'simple_fc2']"
         )
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[model] parameters={n_params:,}")

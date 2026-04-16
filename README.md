@@ -9,8 +9,10 @@ The task is: given a context digit image and an operation (for example, +1 or -2
 ```text
 mnist-math/
 	configs/
-		resnet_baseline.yaml      # ResNet-18 late-fusion baseline config
-		simple_baseline.yaml      # Simple 2-layer FC late-fusion baseline config
+		resnet_baseline.yaml      # ResNet-18 baseline (embedding mode for ops)
+		resnet_linear.yaml        # ResNet-18 with linear op projection
+		resnet_fourier.yaml       # ResNet-18 with Fourier op encoding
+		simple_baseline.yaml      # Simple 2-layer FC late-fusion baseline
 		overfit.yaml              # Deterministic overfit sanity-check config
 
 	data_pipeline/
@@ -87,7 +89,7 @@ pytest tests/ --cov=models --cov=utils --cov=data_pipeline --cov-report=html
 Config schema is split into four sections:
 
 - data: dataset, ops, batch_size, num_workers, data_root
-- model: name, num_classes, op_embed_dim, mlp_hidden
+- model: name, num_classes, op_embed_dim, mlp_hidden, op_embedding_type
 - optim: lr, weight_decay
 - run: epochs, seed, runs_dir, tag, overfit
 
@@ -95,13 +97,39 @@ Model names currently supported:
 
 - resnet18
 - simple_fc2
+- simple_fc_fourier
+
+### Operation Embedding Modes
+
+For ResNet18, the `op_embedding_type` field controls how integer operations are encoded:
+
+- **embedding** (default): Fixed embedding lookup for discrete operations (requires `ops` to be unique)
+- **linear**: Linear projection of raw operation values (works with any values)
+- **fourier**: Fourier features (sin/cos) + linear projection for smooth generalization to unseen operations
+
+Example configs:
+- `configs/resnet_baseline.yaml` (embedding mode)
+- `configs/resnet_linear.yaml` (linear mode)
+- `configs/resnet_fourier.yaml` (Fourier mode)
 
 ## Common commands
 
-Run ResNet baseline:
+Run ResNet baseline (embedding mode):
 
 ```bash
 python train_baseline.py --config configs/resnet_baseline.yaml
+```
+
+Run ResNet with linear operation projection:
+
+```bash
+python train_baseline.py --config configs/resnet_linear.yaml
+```
+
+Run ResNet with Fourier operation encoding (for generalization to unseen ops):
+
+```bash
+python train_baseline.py --config configs/resnet_fourier.yaml
 ```
 
 Run simple 2-layer FC baseline:
@@ -119,7 +147,7 @@ python train_baseline.py --config configs/overfit.yaml
 Run with inline overrides (CLI wins over YAML):
 
 ```bash
-python train_baseline.py --config configs/simple_baseline.yaml --epochs 5 --tag quick-check
+python train_baseline.py --config configs/resnet_baseline.yaml --epochs 20 --op-embedding-type fourier --tag exp1
 ```
 
 ## Run artifacts

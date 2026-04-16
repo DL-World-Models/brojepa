@@ -10,6 +10,7 @@ model:
   num_classes: 10
   op_embed_dim: 32
   mlp_hidden: 256
+  op_embedding_type: embedding
 
 optim:
   lr: 0.001

@@ -101,6 +101,7 @@ class TestModelConfig:
         assert cfg.num_classes == 10
         assert cfg.op_embed_dim == 32
         assert cfg.mlp_hidden == 256
+        assert cfg.op_embedding_type == "embedding"
 
     def test_custom_initialization(self) -> None:
         """Test ModelConfig with custom values."""
@@ -109,11 +110,19 @@ class TestModelConfig:
             num_classes=20,
             op_embed_dim=64,
             mlp_hidden=512,
+            op_embedding_type="fourier",
         )
         assert cfg.name == "simple_fc"
         assert cfg.num_classes == 20
         assert cfg.op_embed_dim == 64
         assert cfg.mlp_hidden == 512
+        assert cfg.op_embedding_type == "fourier"
+
+    def test_different_embedding_types(self) -> None:
+        """Test ModelConfig with different embedding types."""
+        for emb_type in ["embedding", "linear", "fourier"]:
+            cfg = ModelConfig(op_embedding_type=emb_type)
+            assert cfg.op_embedding_type == emb_type
 
 
 class TestOptimConfig:
@@ -188,6 +197,7 @@ class TestExperimentConfig:
             "model": {
                 "name": "simple_fc",
                 "op_embed_dim": 64,
+                "op_embedding_type": "fourier",
             },
         }
         cfg = ExperimentConfig.from_dict(raw)
@@ -196,6 +206,7 @@ class TestExperimentConfig:
         assert cfg.data.batch_size == 64
         assert cfg.model.name == "simple_fc"
         assert cfg.model.op_embed_dim == 64
+        assert cfg.model.op_embedding_type == "fourier"
 
     def test_to_dict_preserves_values(self) -> None:
         """Test to_dict converts to dict correctly."""
@@ -379,9 +390,11 @@ class TestApplyCliOverrides:
         overrides = {
             "model_name": "simple_fc",
             "op_embed_dim": 64,
+            "op_embedding_type": "linear",
         }
 
         result = apply_cli_overrides(cfg, overrides)
 
         assert result.model.name == "simple_fc"
         assert result.model.op_embed_dim == 64
+        assert result.model.op_embedding_type == "linear"
