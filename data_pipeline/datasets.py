@@ -1,30 +1,29 @@
 import random
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 
 
-# ARITHMETIC DATASET CLASS
-class ArithmeticDataset(Dataset):
-    """
-    getitem returns: context_img, ctx_label, operation, target_img, target_label
-    """
+class ArithmeticDataset(Dataset[dict[str, torch.Tensor]]):
+    """Returns arithmetic transition samples for MNIST-like datasets."""
 
-    def __init__(self, base_dataset, operations, transform=None):
+    def __init__(
+        self,
+        base_dataset: Any,
+        operations: Sequence[int],
+        transform: Callable[[Any], torch.Tensor] | None = None,
+    ) -> None:
         self.base_dataset = base_dataset
-
-        # CURRENTLY ONLY SUPPORTS ADDITION/SUBTRACTION
-        self.operations = operations  # e.g. [1, 2, -1, -2]
+        self.operations = list(operations)
         self.transform = transform
-
-        # Pre-index labels to find target images quickly
-        # (Apparently this is more efficient)
         self.label_to_indices = self._index_labels()
         self.num_classes = len(self.label_to_indices.keys())
 
-    def _index_labels(self):
-        idx_map = {}
+    def _index_labels(self) -> dict[int, list[int]]:
+        idx_map: dict[int, list[int]] = {}
         for i in range(len(self.base_dataset)):
             _, label = self.base_dataset[i]
             if label not in idx_map:
@@ -32,21 +31,15 @@ class ArithmeticDataset(Dataset):
             idx_map[label].append(i)
         return idx_map
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.base_dataset)
 
-    def __getitem__(self, idx):
-        # State t: Context
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         ctx_img, ctx_label = self.base_dataset[idx]
 
-        # Transformation: Randomly select an operation from the allowed list
         op_val = random.choice(self.operations)
-
-        # State t+1: Calculate target label (modular arithmetic)
-        # e.g. (9 + 2) % 10 = 1
         tgt_label = (ctx_label + op_val) % self.num_classes
 
-        # Retrieve random target image of that class (ensures latent invariance)
         tgt_idx = random.choice(self.label_to_indices[tgt_label])
         tgt_img, _ = self.base_dataset[tgt_idx]
 
@@ -63,26 +56,45 @@ class ArithmeticDataset(Dataset):
         }
 
 
+class FixedSampleDataset(Dataset[dict[str, torch.Tensor]]):
+    """Snapshots a deterministic subset for overfit sanity checks."""
+
+    def __init__(self, base: Dataset[dict[str, torch.Tensor]], n: int) -> None:
+        self.samples: list[dict[str, torch.Tensor]] = [base[i] for i in range(n)]
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        return self.samples[idx]
+
+
 def get_arithmetic_dataloader(
-    dataset_name="MNIST", batch_size=64, ops=[1, 2, -1, -2], is_train=True
-):
-    """
-    Factory function to easily create loaders for MNIST or EMNIST.
-    """
-    # Standard MNIST/EMNIST normalization constants
+    dataset_name: str = "MNIST",
+    batch_size: int = 64,
+    ops: Sequence[int] = (1, 2, -1, -2),
+    is_train: bool = True,
+    data_root: str = "./data",
+    num_workers: int = 0,
+) -> DataLoader[dict[str, torch.Tensor]]:
     t = transforms.Compose(
         [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
     )
 
     if dataset_name.upper() == "MNIST":
-        base = datasets.MNIST(root="./data", train=is_train, download=True)
+        base = datasets.MNIST(root=data_root, train=is_train, download=True)
     elif dataset_name.upper() == "EMNIST":
         base = datasets.EMNIST(
-            root="./data", split="digits", train=is_train, download=True
+            root=data_root, split="digits", train=is_train, download=True
         )
     else:
         raise ValueError("Only MNIST and EMNIST are currently supported.")
 
     arith_ds = ArithmeticDataset(base, operations=ops, transform=t)
 
-    return DataLoader(arith_ds, batch_size=batch_size, shuffle=is_train)
+    return DataLoader(
+        arith_ds,
+        batch_size=batch_size,
+        shuffle=is_train,
+        num_workers=num_workers,
+    )

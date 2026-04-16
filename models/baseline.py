@@ -38,7 +38,7 @@ class ResNet18LateFusion(nn.Module):
 
     The set of allowed operations is fixed at construction time and stored as
     a buffer, so the model is a self-contained artifact: at forward time we
-    accept raw integer op values (as produced by data_utils.ArithmeticDataset)
+    accept raw integer op values (as produced by data_pipeline.ArithmeticDataset)
     and look up the embedding index internally.
     """
 

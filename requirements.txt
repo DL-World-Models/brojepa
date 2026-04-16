@@ -6,6 +6,7 @@ torch>=2.3
 torchvision>=0.18
 torchmetrics>=1.4
 tqdm>=4.66
+PyYAML>=6.0
 
 # Optional, lazy-imported (only needed if you pass --wandb to train_baseline):
 # wandb>=0.17

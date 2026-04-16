@@ -8,6 +8,7 @@ venv/
 # Project artifacts
 data/
 wandb/
+runs/
 *.pt
 *.pth
 
@@ -19,3 +20,50 @@ wandb/
 .DS_Store
 .idea/
 .vscode/
+
+# ---- Logs ----
+*.log
+logs/
+*.out
+*.err
+
+# ---- macOS ----
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+
+# Environment variables
+.env
+.env.*
+

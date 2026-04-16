@@ -2,13 +2,15 @@
 
 Typical usage
 -------------
-Full training run (MPS / CUDA picked automatically):
+Train from configs/baseline.yaml (MPS / CUDA picked automatically):
 
-    python train_baseline.py --epochs 10
+    python train_baseline.py
 
-Sanity-check by overfitting a deterministic 64-sample subset:
 
-    python train_baseline.py --overfit 64 --epochs 50 --lr 3e-4
+Only override config values via CLI when you want to quickly test a single change without editing YAML, or to sweep over a few values in a script.
+Override selected values inline (CLI wins over YAML):
+
+    python train_baseline.py --epochs 10 --overfit 64 --lr 3e-4
 
 The script writes all artifacts (config, history, best/last checkpoints) to
 `runs/baseline/<timestamp>-<tag>/` so every run is self-describing and
@@ -24,13 +26,15 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchmetrics.classification import MulticlassAccuracy
 from tqdm import tqdm
 
-from data_utils import get_arithmetic_dataloader
+from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
+from experiment_config import apply_cli_overrides, load_experiment_config
 from models import ResNet18LateFusion
 from utils import get_device, set_seed
+
 
 # --------------------------------------------------------------------------- #
 # Run-directory helpers
@@ -49,36 +53,11 @@ def _git_hash() -> str:
     except Exception:
         return "unknown"
 
-
 def _build_run_dir(root: str, tag: str) -> Path:
     ts = time.strftime("%Y%m%d-%H%M%S")
     run_dir = Path(root) / f"{ts}-{tag}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
-
-
-# --------------------------------------------------------------------------- #
-# Overfit sanity-check support
-# --------------------------------------------------------------------------- #
-
-
-class _FixedSampleDataset(Dataset):
-    """Materializes a small, deterministic snapshot of an ArithmeticDataset.
-
-    The underlying dataset samples operations and target images randomly at
-    every __getitem__, so a naive Subset would return a different (img, op,
-    tgt) triple every epoch — useless for overfit sanity-checks. We snapshot
-    the first N samples once and serve them forever after.
-    """
-
-    def __init__(self, base: Dataset, n: int) -> None:
-        self.samples = [base[i] for i in range(n)]
-
-    def __len__(self) -> int:
-        return len(self.samples)
-
-    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
-        return self.samples[idx]
 
 
 # --------------------------------------------------------------------------- #
@@ -88,7 +67,7 @@ class _FixedSampleDataset(Dataset):
 
 def _run_epoch(
     model: nn.Module,
-    loader: DataLoader,
+    loader: DataLoader[dict[str, torch.Tensor]],
     criterion: nn.Module,
     device: torch.device,
     acc_metric: MulticlassAccuracy,
@@ -100,7 +79,7 @@ def _run_epoch(
     acc_metric.reset()
 
     total_loss, n = 0.0, 0
-    pbar = tqdm(loader, desc=desc, leave=False)
+    pbar: Any = tqdm(loader, desc=desc, leave=False)
     for batch in pbar:
         img = batch["ctx_img"].to(device, non_blocking=True)
         op = batch["op"].to(device, non_blocking=True)
@@ -118,7 +97,7 @@ def _run_epoch(
         total_loss += loss.item() * bs
         n += bs
         acc_metric.update(logits.detach(), tgt)
-        pbar.set_postfix(loss=f"{total_loss / n:.4f}")
+        pbar.set_postfix({"loss": f"{total_loss / n:.4f}"})
 
     return {"loss": total_loss / max(n, 1), "acc": acc_metric.compute().item()}
 
@@ -130,22 +109,25 @@ def _run_epoch(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--dataset", type=str, default="MNIST", choices=["MNIST", "EMNIST"])
-    p.add_argument("--ops", type=int, nargs="+", default=[1, 2, -1, -2])
-    p.add_argument("--batch-size", type=int, default=128)
-    p.add_argument("--epochs", type=int, default=10)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--op-embed-dim", type=int, default=32)
-    p.add_argument("--mlp-hidden", type=int, default=256)
-    p.add_argument("--num-workers", type=int, default=0)
-    p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--runs-dir", type=str, default="runs/baseline")
-    p.add_argument("--tag", type=str, default="run")
+    p.add_argument("--config", type=str, default="configs/baseline.yaml")
+    p.add_argument("--dataset", type=str, default=None, choices=["MNIST", "EMNIST"])
+    p.add_argument("--ops", type=int, nargs="+", default=None)
+    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--data-root", type=str, default=None)
+    p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--weight-decay", type=float, default=None)
+    p.add_argument("--num-classes", type=int, default=None)
+    p.add_argument("--op-embed-dim", type=int, default=None)
+    p.add_argument("--mlp-hidden", type=int, default=None)
+    p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--runs-dir", type=str, default=None)
+    p.add_argument("--tag", type=str, default=None)
     p.add_argument(
         "--overfit",
         type=int,
-        default=0,
+        default=None,
         help="If > 0, train on a deterministic snapshot of N samples "
         "(sanity check that the model + loop can drive loss to ~0).",
     )
@@ -154,67 +136,79 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    set_seed(args.seed)
+    config = load_experiment_config(args.config)
+    config = apply_cli_overrides(config, vars(args))
+    set_seed(config.run.seed)
     device = get_device()
-    run_dir = _build_run_dir(args.runs_dir, args.tag)
+    run_dir = _build_run_dir(config.run.runs_dir, config.run.tag)
 
     print(f"[run] device={device}  run_dir={run_dir}")
-    print(f"[run] config={vars(args)}")
+    print(f"[run] config={config.to_dict()}")
+
+    config_blob: dict[str, Any] = {
+        **config.to_dict(),
+        "git_hash": _git_hash(),
+        "device": str(device),
+    }
+    (run_dir / "config.json").write_text(json.dumps(config_blob, indent=2))
 
     # ---- data ---- #
     train_loader = get_arithmetic_dataloader(
-        dataset_name=args.dataset,
-        batch_size=args.batch_size,
-        ops=args.ops,
+        dataset_name=config.data.dataset,
+        batch_size=config.data.batch_size,
+        ops=config.data.ops,
         is_train=True,
+        data_root=config.data.data_root,
+        num_workers=config.data.num_workers,
     )
     test_loader = get_arithmetic_dataloader(
-        dataset_name=args.dataset,
-        batch_size=args.batch_size,
-        ops=args.ops,
+        dataset_name=config.data.dataset,
+        batch_size=config.data.batch_size,
+        ops=config.data.ops,
         is_train=False,
+        data_root=config.data.data_root,
+        num_workers=config.data.num_workers,
     )
 
-    if args.overfit > 0:
-        snap = _FixedSampleDataset(train_loader.dataset, args.overfit)
-        bs = min(args.batch_size, args.overfit)
+    if config.run.overfit > 0:
+        snap = FixedSampleDataset(train_loader.dataset, config.run.overfit)
+        bs = min(config.data.batch_size, config.run.overfit)
         train_loader = DataLoader(
-            snap, batch_size=bs, shuffle=True, num_workers=args.num_workers
+            snap,
+            batch_size=bs,
+            shuffle=True,
+            num_workers=config.data.num_workers,
         )
         test_loader = DataLoader(
-            snap, batch_size=bs, shuffle=False, num_workers=args.num_workers
+            snap,
+            batch_size=bs,
+            shuffle=False,
+            num_workers=config.data.num_workers,
         )
-        print(f"[overfit] snapshotted {args.overfit} samples (train == eval set)")
+        print(f"[overfit] snapshotted {config.run.overfit} samples (train == eval set)")
 
     # ---- model / optim ---- #
     model = ResNet18LateFusion(
-        ops=args.ops,
-        num_classes=10,
-        op_embed_dim=args.op_embed_dim,
-        mlp_hidden=args.mlp_hidden,
+        ops=config.data.ops,
+        num_classes=config.model.num_classes,
+        op_embed_dim=config.model.op_embed_dim,
+        mlp_hidden=config.model.mlp_hidden,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[model] parameters={n_params:,}")
 
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+        model.parameters(),
+        lr=config.optim.lr,
+        weight_decay=config.optim.weight_decay,
     )
     criterion = nn.CrossEntropyLoss()
-    acc_metric = MulticlassAccuracy(num_classes=10).to(device)
-
-    # Persist config + git hash up-front so a mid-run crash is still traceable.
-    config_blob: dict[str, Any] = {
-        **vars(args),
-        "git_hash": _git_hash(),
-        "device": str(device),
-        "num_params": n_params,
-    }
-    (run_dir / "config.json").write_text(json.dumps(config_blob, indent=2))
+    acc_metric = MulticlassAccuracy(num_classes=config.model.num_classes).to(device)
 
     # ---- train ---- #
-    history = []
+    history: list[dict[str, Any]] = []
     best_test_acc = -1.0
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(1, config.run.epochs + 1):
         train_stats = _run_epoch(
             model,
             train_loader,
@@ -222,7 +216,7 @@ def main() -> None:
             device,
             acc_metric,
             optimizer=optimizer,
-            desc=f"epoch {epoch}/{args.epochs} train",
+            desc=f"epoch {epoch}/{config.run.epochs} train",
         )
         test_stats = _run_epoch(
             model,
@@ -231,7 +225,7 @@ def main() -> None:
             device,
             acc_metric,
             optimizer=None,
-            desc=f"epoch {epoch}/{args.epochs}  eval",
+            desc=f"epoch {epoch}/{config.run.epochs}  eval",
         )
         print(
             f"[epoch {epoch:3d}] "
@@ -243,19 +237,25 @@ def main() -> None:
 
         if test_stats["acc"] > best_test_acc:
             best_test_acc = test_stats["acc"]
-            torch.save(
+            save_fn: Any = getattr(torch, "save")
+            save_fn(
                 {
                     "model": model.state_dict(),
                     "epoch": epoch,
                     "test_acc": best_test_acc,
                     "config": config_blob,
                 },
-                run_dir / "best.pt",
+                str(run_dir / "best.pt"),
             )
 
-    torch.save(
-        {"model": model.state_dict(), "epoch": args.epochs, "config": config_blob},
-        run_dir / "last.pt",
+    save_fn: Any = getattr(torch, "save")
+    save_fn(
+        {
+            "model": model.state_dict(),
+            "epoch": config.run.epochs,
+            "config": config_blob,
+        },
+        str(run_dir / "last.pt"),
     )
     print(f"[done] best test acc={best_test_acc:.4f}  artifacts in {run_dir}")
 
