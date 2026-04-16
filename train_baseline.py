@@ -1,10 +1,14 @@
-"""Train the ResNet-18 late-fusion baseline for the MNIST-arithmetic task.
+"""Train configurable baselines for the MNIST-arithmetic task.
 
 Typical usage
 -------------
-Train from configs/baseline.yaml (MPS / CUDA picked automatically):
+Train ResNet baseline from YAML (MPS / CUDA picked automatically):
 
-    python train_baseline.py
+    python train_baseline.py --config configs/resnet_baseline.yaml
+
+Train simple 2-layer FC baseline:
+
+    python train_baseline.py --config configs/simple_baseline.yaml
 
 
 Only override config values via CLI when you want to quickly test a single change without editing YAML, or to sweep over a few values in a script.
@@ -31,9 +35,9 @@ from torchmetrics.classification import MulticlassAccuracy
 from tqdm import tqdm
 
 from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
-from experiment_config import apply_cli_overrides, load_experiment_config
-from models import ResNet18LateFusion
-from utils import get_device, set_seed
+from utils.experiment_config import apply_cli_overrides, load_experiment_config
+from models import ResNet18LateFusion, SimpleFCLateFusion
+from utils.common import get_device, set_seed
 
 
 # --------------------------------------------------------------------------- #
@@ -109,9 +113,10 @@ def _run_epoch(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, default="configs/baseline.yaml")
+    p.add_argument("--config", type=str, default="configs/resnet_baseline.yaml")
     p.add_argument("--dataset", type=str, default=None, choices=["MNIST", "EMNIST"])
     p.add_argument("--ops", type=int, nargs="+", default=None)
+    p.add_argument("--model-name", type=str, default=None)
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--data-root", type=str, default=None)
     p.add_argument("--epochs", type=int, default=None)
@@ -188,12 +193,25 @@ def main() -> None:
         print(f"[overfit] snapshotted {config.run.overfit} samples (train == eval set)")
 
     # ---- model / optim ---- #
-    model = ResNet18LateFusion(
-        ops=config.data.ops,
-        num_classes=config.model.num_classes,
-        op_embed_dim=config.model.op_embed_dim,
-        mlp_hidden=config.model.mlp_hidden,
-    ).to(device)
+    if config.model.name == "resnet18":
+        model = ResNet18LateFusion(
+            ops=config.data.ops,
+            num_classes=config.model.num_classes,
+            op_embed_dim=config.model.op_embed_dim,
+            mlp_hidden=config.model.mlp_hidden,
+        ).to(device)
+    elif config.model.name == "simple_fc2":
+        model = SimpleFCLateFusion(
+            ops=config.data.ops,
+            num_classes=config.model.num_classes,
+            op_embed_dim=config.model.op_embed_dim,
+            mlp_hidden=config.model.mlp_hidden,
+        ).to(device)
+    else:
+        raise ValueError(
+            f"Unknown model.name='{config.model.name}'. "
+            "Supported: ['resnet18', 'simple_fc2']"
+        )
     n_params = sum(p.numel() for p in model.parameters())
     print(f"[model] parameters={n_params:,}")
 

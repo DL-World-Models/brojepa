@@ -18,6 +18,7 @@ class DataConfig:
 
 @dataclass(slots=True)
 class ModelConfig:
+    name: str = "resnet18"
     num_classes: int = 10
     op_embed_dim: int = 32
     mlp_hidden: int = 256
@@ -60,6 +61,7 @@ class ExperimentConfig:
             data_root=data_raw.get("data_root", "./data"),
         )
         model = ModelConfig(
+            name=str(model_raw.get("name", "resnet18")),
             num_classes=int(model_raw.get("num_classes", 10)),
             op_embed_dim=int(model_raw.get("op_embed_dim", 32)),
             mlp_hidden=int(model_raw.get("mlp_hidden", 256)),
@@ -108,6 +110,7 @@ def apply_cli_overrides(
         "batch_size": ("data", "batch_size"),
         "num_workers": ("data", "num_workers"),
         "data_root": ("data", "data_root"),
+        "model_name": ("model", "name"),
         "num_classes": ("model", "num_classes"),
         "op_embed_dim": ("model", "op_embed_dim"),
         "mlp_hidden": ("model", "mlp_hidden"),

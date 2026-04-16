@@ -2,9 +2,13 @@
 
 ## Training
 
-Run baseline training directly:
+Run ResNet baseline:
 
-- `python train_baseline.py`
+- `python train_baseline.py --config configs/resnet_baseline.yaml`
+
+Run simple 2-layer FC baseline:
+
+- `python train_baseline.py --config configs/simple_baseline.yaml`
 
 Use the overfit sanity config directly (no launcher script):
 
@@ -12,4 +16,4 @@ Use the overfit sanity config directly (no launcher script):
 
 Override any value inline when needed:
 
-- `python train_baseline.py --config configs/baseline.yaml --epochs 5 --tag quick-check`
+- `python train_baseline.py --config configs/simple_baseline.yaml --epochs 5 --tag quick-check`
