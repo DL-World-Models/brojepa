@@ -1,12 +1,13 @@
-from models.resnet_baseline import ResNet18LateFusion
-from models.simple_baseline import SimpleFCLateFusion
 from models.op_embedding import (
     OperationEmbedding,
-    OperationEmbeddingLookup,
-    OperationEmbeddingLinear,
     OperationEmbeddingFourier,
+    OperationEmbeddingHybrid,
+    OperationEmbeddingLinear,
+    OperationEmbeddingLookup,
     create_operation_embedding,
 )
+from models.resnet_baseline import ResNet18LateFusion
+from models.simple_baseline import SimpleFCLateFusion
 
 __all__ = [
     "ResNet18LateFusion",
@@ -15,5 +16,6 @@ __all__ = [
     "OperationEmbeddingLookup",
     "OperationEmbeddingLinear",
     "OperationEmbeddingFourier",
+    "OperationEmbeddingHybrid",
     "create_operation_embedding",
 ]
