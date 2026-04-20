@@ -1,15 +1,15 @@
 """Tests for operation embedding abstraction module."""
 
-import torch
-import torch.nn as nn
 import pytest
+import torch
 from torch.nn import functional as F
 
 from models import (
     OperationEmbedding,
-    OperationEmbeddingLookup,
-    OperationEmbeddingLinear,
     OperationEmbeddingFourier,
+    OperationEmbeddingHybrid,
+    OperationEmbeddingLinear,
+    OperationEmbeddingLookup,
     create_operation_embedding,
 )
 
@@ -340,6 +340,97 @@ class TestOperationEmbeddingFourier:
             assert output.shape == (batch_size, op_embed_dim)
 
 
+class TestOperationEmbeddingHybrid:
+    """Tests for OperationEmbeddingHybrid class."""
+
+    def test_initialization(self) -> None:
+        """Test OperationEmbeddingHybrid initializes correctly."""
+        op_embed_dim = 32
+        embed = OperationEmbeddingHybrid(op_embed_dim)
+
+        assert isinstance(embed, OperationEmbedding)
+        assert embed.op_embed_dim == op_embed_dim
+        assert hasattr(embed, "sign_dim")
+        assert hasattr(embed, "fourier_dim")
+        # Ensure projection input size aligns with concat size
+        assert embed.sign_dim + embed.fourier_dim == embed.proj[0].in_features
+
+    def test_forward_pass_single_op(self) -> None:
+        """Test forward pass with single operation value."""
+        op_embed_dim = 32
+        embed = OperationEmbeddingHybrid(op_embed_dim)
+        embed.eval()
+
+        op_val = torch.tensor([1.0])
+        with torch.no_grad():
+            output = embed(op_val)
+
+        assert output.shape == (1, op_embed_dim)
+        assert not torch.isnan(output).any()
+
+    def test_forward_pass_batch(self) -> None:
+        """Test forward pass with batch."""
+        op_embed_dim = 32
+        embed = OperationEmbeddingHybrid(op_embed_dim)
+        embed.eval()
+
+        op_vals = torch.tensor([1.0, 2.0, -1.0, -2.0])
+        with torch.no_grad():
+            output = embed(op_vals)
+
+        assert output.shape == (4, op_embed_dim)
+
+    def test_sign_differentiation(self) -> None:
+        """Test that opposite signs of the same magnitude produce different embeddings."""
+        op_embed_dim = 32
+        embed = OperationEmbeddingHybrid(op_embed_dim)
+        embed.eval()
+
+        op_pos = torch.tensor([2.0])
+        op_neg = torch.tensor([-2.0])
+
+        with torch.no_grad():
+            out_pos = embed(op_pos)
+            out_neg = embed(op_neg)
+
+        # Outputs should be different because the sign component differs
+        assert not torch.allclose(out_pos, out_neg)
+
+    def test_magnitude_differentiation(self) -> None:
+        """Test that different magnitudes of the same sign produce different embeddings."""
+        op_embed_dim = 32
+        embed = OperationEmbeddingHybrid(op_embed_dim)
+        embed.eval()
+
+        op_pos1 = torch.tensor([1.0])
+        op_pos2 = torch.tensor([2.0])
+
+        with torch.no_grad():
+            out_pos1 = embed(op_pos1)
+            out_pos2 = embed(op_pos2)
+
+        # Outputs should be different because the Fourier magnitude component differs
+        assert not torch.allclose(out_pos1, out_pos2)
+
+    def test_gradient_flow(self) -> None:
+        """Test that gradients flow through the hybrid projection and sign embed."""
+        op_embed_dim = 32
+        embed = OperationEmbeddingHybrid(op_embed_dim)
+
+        op_vals = torch.tensor([1.0, -2.0], requires_grad=True)
+        output = embed(op_vals)
+        loss = output.sum()
+        loss.backward()
+
+        # Check that projection layer has gradients
+        for param in embed.proj.parameters():
+            if param.requires_grad:
+                assert param.grad is not None
+
+        # Check that sign embedding lookup has gradients
+        assert embed.sign_embed.weight.grad is not None
+
+
 class TestCreateOperationEmbedding:
     """Tests for the factory function create_operation_embedding."""
 
@@ -361,6 +452,12 @@ class TestCreateOperationEmbedding:
         embed = create_operation_embedding("fourier", 32)
 
         assert isinstance(embed, OperationEmbeddingFourier)
+
+    def test_create_hybrid_type(self) -> None:
+        """Test factory creates OperationEmbeddingHybrid for 'hybrid' type."""
+        embed = create_operation_embedding("hybrid", 32)
+
+        assert isinstance(embed, OperationEmbeddingHybrid)
 
     def test_invalid_type_raises_error(self) -> None:
         """Test that invalid embedding type raises ValueError."""
@@ -387,7 +484,7 @@ class TestCreateOperationEmbedding:
         ops = [1, 2, -1, -2]
         op_vals = torch.tensor([1.0, 2.0, -1.0, -2.0])
 
-        for embedding_type in ["embedding", "linear", "fourier"]:
+        for embedding_type in ["embedding", "linear", "fourier", "hybrid"]:
             ops_param = ops if embedding_type == "embedding" else None
             embed = create_operation_embedding(embedding_type, 32, ops_param)
             embed.eval()
@@ -401,7 +498,7 @@ class TestCreateOperationEmbedding:
     def test_embedding_dim_respected(self) -> None:
         """Test that specified embedding dimension is respected."""
         for embed_dim in [16, 32, 64]:
-            for embedding_type in ["embedding", "linear", "fourier"]:
+            for embedding_type in ["embedding", "linear", "fourier", "hybrid"]:
                 ops_param = [1, 2, -1, -2] if embedding_type == "embedding" else None
                 embed = create_operation_embedding(embedding_type, embed_dim, ops_param)
 
@@ -412,7 +509,7 @@ class TestCreateOperationEmbedding:
         ops = [1, 2, -1, -2]
         op_vals = torch.tensor([1.0, 2.0])
 
-        for embedding_type in ["embedding", "linear", "fourier"]:
+        for embedding_type in ["embedding", "linear", "fourier", "hybrid"]:
             ops_param = ops if embedding_type == "embedding" else None
             embed = create_operation_embedding(embedding_type, 32, ops_param)
             embed.eval()
