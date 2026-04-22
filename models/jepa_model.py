@@ -1,5 +1,5 @@
 from models.encoder import ContextEncoder
-from models.action_embedding import OperationEmbedding
+from models.op_embedding import create_operation_embedding
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
@@ -10,7 +10,7 @@ class JepaPredictor(nn.Module):
     A MLP model turning the context latent from Context encoder and action embedding from operation embedding into
     the latent vector of the predicted image class.
     '''
-    def __init__(self, latent_dim=64, op_embed_dim=32, hidden_dim=(256, 256), dropout=0.1, normalize = True):
+    def __init__(self, latent_dim=64, op_embed_dim=32, hidden_dim=(256, 256), dropout=0.1, normalize=True):
         super().__init__()
         self.normalize = normalize
 
@@ -62,8 +62,9 @@ class IJepaModel(nn.Module):
         )-> None:
         super().__init__()
         self.use_class_head = use_class_head
+        self.embedding_type = embedding_type
+        self.op_embed_dim = op_embed_dim
 
-        self.action_embed = OperationEmbedding(embedding_type=embedding_type, op_embed_dim=op_embed_dim)
         self.context_encoder = ContextEncoder(latent_dim=latent_dim, encoder_type=encoder_type, **encoder_kwargs)
         self.target_encoder = ContextEncoder(latent_dim=latent_dim, encoder_type=encoder_type, **encoder_kwargs)
 
@@ -83,11 +84,11 @@ class IJepaModel(nn.Module):
         for target_param, context_param in zip(self.target_encoder.parameters(), self.context_encoder.parameters()):
             target_param.data = momentum * target_param.data + (1.0 - momentum) * context_param.data
 
-    def forward(self, context_images, target_images,actions):
+    def forward(self, context_images, target_images, actions):
         context_latent =self.context_encoder(context_images)
         with torch.no_grad():
             target_latent = self.target_encoder(target_images)
-        actions_embedded = self.actions_embed(actions)
+        actions_embedded = create_operation_embedding(self.embedding_type, self.op_embed_dim, actions)
         predicted_latent = self.jepa_predictor(context_latent, actions_embedded)
         class_logits = None
         if self.use_class_head:
