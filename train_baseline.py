@@ -21,11 +21,7 @@ The script writes all artifacts (config, history, best/last checkpoints) to
 reproducible given the saved config + git hash.
 """
 
-import argparse
 import json
-import subprocess
-import time
-from pathlib import Path
 from typing import Any
 
 import torch
@@ -35,39 +31,14 @@ from torchmetrics.classification import MulticlassAccuracy
 from tqdm import tqdm
 
 from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
-from utils.experiment_config import apply_cli_overrides, load_experiment_config
+from utils.experiment_config import apply_cli_overrides, load_experiment_config, parse_args
 from models import ResNet18LateFusion, SimpleFCLateFusion
-from utils.common import get_device, set_seed
-
-
-# --------------------------------------------------------------------------- #
-# Run-directory helpers
-# --------------------------------------------------------------------------- #
-
-
-def _git_hash() -> str:
-    try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
-            )
-            .decode()
-            .strip()
-        )
-    except Exception:
-        return "unknown"
-
-def _build_run_dir(root: str, tag: str) -> Path:
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    run_dir = Path(root) / f"{ts}-{tag}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
+from utils.common import get_device, set_seed, build_run_dir, git_hash
 
 
 # --------------------------------------------------------------------------- #
 # One train / eval epoch
 # --------------------------------------------------------------------------- #
-
 
 def _run_epoch(
     model: nn.Module,
@@ -110,51 +81,20 @@ def _run_epoch(
 # Main
 # --------------------------------------------------------------------------- #
 
-
-def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument("--config", type=str, default="configs/resnet_baseline.yaml")
-    p.add_argument("--dataset", type=str, default=None, choices=["MNIST", "EMNIST"])
-    p.add_argument("--ops", type=int, nargs="+", default=None)
-    p.add_argument("--test-ops", type=int, nargs="+", default=None)
-    p.add_argument("--model-name", type=str, default=None)
-    p.add_argument("--batch-size", type=int, default=None)
-    p.add_argument("--data-root", type=str, default=None)
-    p.add_argument("--epochs", type=int, default=None)
-    p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--weight-decay", type=float, default=None)
-    p.add_argument("--num-classes", type=int, default=None)
-    p.add_argument("--op-embed-dim", type=int, default=None)
-    p.add_argument("--mlp-hidden", type=int, default=None)
-    p.add_argument("--op-embedding-type", type=str, default=None)
-    p.add_argument("--num-workers", type=int, default=None)
-    p.add_argument("--seed", type=int, default=None)
-    p.add_argument("--runs-dir", type=str, default=None)
-    p.add_argument("--tag", type=str, default=None)
-    p.add_argument(
-        "--overfit",
-        type=int,
-        default=None,
-        help="If > 0, train on a deterministic snapshot of N samples "
-        "(sanity check that the model + loop can drive loss to ~0).",
-    )
-    return p.parse_args()
-
-
 def main() -> None:
     args = parse_args()
     config = load_experiment_config(args.config)
     config = apply_cli_overrides(config, vars(args))
     set_seed(config.run.seed)
     device = get_device()
-    run_dir = _build_run_dir(config.run.runs_dir, config.run.tag)
+    run_dir = build_run_dir(config.run.runs_dir, config.run.tag)
 
     print(f"[run] device={device}  run_dir={run_dir}")
     print(f"[run] config={config.to_dict()}")
 
     config_blob: dict[str, Any] = {
         **config.to_dict(),
-        "git_hash": _git_hash(),
+        "git_hash": git_hash(),
         "device": str(device),
     }
     (run_dir / "config.json").write_text(json.dumps(config_blob, indent=2))

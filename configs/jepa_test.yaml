@@ -1,0 +1,53 @@
+data:
+  dataset: MNIST
+  ops: [1, 2, -1, -2]
+  test_ops: [-1, -2]  # Subset of seen ops for embedding mode
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  # for action embedding
+  op_embed_dim: 32
+  op_embedding_type: 'linear'
+
+  # for encoder
+  encoder_type: 'cnn' # 'cnn', 'mlp', 'vit'
+  latent_dim: 64
+
+  # for 'mlp' or 'cnn' encoder
+  encoder_normalize: True
+  activation: 'relu'
+  encoder_hidden_dim: 256
+
+  # for ViTEncoder
+  patch_size: 7
+  d_model: 128
+  depth: 4
+  nhead: 4
+  mlp_dim: 256
+  use_cls_token: False
+
+  # for JepaPredictor:
+  predictor_dropout: 0.2
+  predictor_hidden_dim: [256, 256]
+  predictor_normalize: True
+
+  # for Classification_head
+  classifier_hidden_dim: 64
+  num_classes: 10
+
+  # EMA update rate for targe_encoder
+  momentum: 0.99
+
+optim:
+  lr: 1e-3
+  weight_decay: 1e-4
+  cls_weight: 0.0001 # weight for classification supervision
+
+
+run:
+  epochs: 10
+  seed: 42
+  runs_dir: runs/jepa
+  tag: encoder

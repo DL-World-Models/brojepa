@@ -3,7 +3,7 @@ from models.op_embedding import create_operation_embedding
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-
+from collections.abc import Sequence
 
 class JepaPredictor(nn.Module):
     '''
@@ -26,7 +26,7 @@ class JepaPredictor(nn.Module):
     def forward(self, contex_latent, actions_embedded):
         z = torch.cat([contex_latent, actions_embedded], dim=-1)
         z = self.net(z)
-        return F.normalize(z, dim=-1)  if self.normalize else z
+        return F.normalize(z, dim=-1) if self.normalize else z
 
 class ClassHead(nn.Module):
     '''
@@ -50,29 +50,38 @@ class IJepaModel(nn.Module):
     '''
     def __init__(
             self,
+            ops: Sequence[int],
             latent_dim: int = 64,
             op_embed_dim: int = 32,
-            embedding_type: str = "linear",
+            op_embedding_type: str = "linear",
             encoder_type: str = "cnn",
-            predictor_hidden_dims: tuple[int, int] = (256, 256),
-            predictor_dropout: float = 0.1,
-            normalize_predictor: bool = True,
+            predictor_hidden_dim: tuple[int, int] = (256, 256),
+            predictor_dropout: float = 0.2,
+            predictor_normalize: bool = True,
             use_class_head: bool = True,
-            **encoder_kwargs
+            momentum: float = 0.99,
+            **kwargs: dict[str, dict] #
         )-> None:
         super().__init__()
         self.use_class_head = use_class_head
-        self.embedding_type = embedding_type
         self.op_embed_dim = op_embed_dim
+        self.momentum = momentum
 
+        self.op_embed = create_operation_embedding(
+            embedding_type=op_embedding_type,
+            op_embed_dim=op_embed_dim,
+            ops=list(ops) if op_embedding_type == "embedding" else None,
+        )
+
+        encoder_kwargs = kwargs.get('encoder_kwargs', {})
         self.context_encoder = ContextEncoder(latent_dim=latent_dim, encoder_type=encoder_type, **encoder_kwargs)
         self.target_encoder = ContextEncoder(latent_dim=latent_dim, encoder_type=encoder_type, **encoder_kwargs)
 
         self.jepa_predictor = JepaPredictor(latent_dim=latent_dim, op_embed_dim=op_embed_dim,
-                                            hidden_dims=predictor_hidden_dims, dropout=predictor_dropout,
-                                            normalize=normalize_predictor)
-
-        self.class_head = ClassHead(latent_dim=latent_dim) if use_class_head else None
+                                            hidden_dim=predictor_hidden_dim, dropout=predictor_dropout,
+                                            normalize=predictor_normalize)
+        classifier_kwargs = kwargs.get('classifier_kwargs', {})
+        self.class_head = ClassHead(latent_dim=latent_dim, **classifier_kwargs) if use_class_head else None
         self._init_target_encoder()
 
     def _init_target_encoder(self):
@@ -80,15 +89,15 @@ class IJepaModel(nn.Module):
         for param in self.target_encoder.parameters():
             param.requires_grad = False
     @torch.no_grad()
-    def update_target_encoder(self, momentum = 0.99):
+    def update_target_encoder(self):
         for target_param, context_param in zip(self.target_encoder.parameters(), self.context_encoder.parameters()):
-            target_param.data = momentum * target_param.data + (1.0 - momentum) * context_param.data
+            target_param.data = self.momentum * target_param.data + (1.0 - self.momentum) * context_param.data
 
     def forward(self, context_images, target_images, actions):
         context_latent =self.context_encoder(context_images)
         with torch.no_grad():
             target_latent = self.target_encoder(target_images)
-        actions_embedded = create_operation_embedding(self.embedding_type, self.op_embed_dim, actions)
+        actions_embedded = self.op_embed(actions)
         predicted_latent = self.jepa_predictor(context_latent, actions_embedded)
         class_logits = None
         if self.use_class_head:
@@ -108,8 +117,9 @@ def compute_loss(predicted_latent, target_latent, target_labels=None, class_logi
         accuracy = predicted_latent.new_tensor(0.0)
 
     total_loss = jepa_loss + cls_loss * cls_weight
+    outputs = {'total_loss': total_loss, 'accuracy': accuracy, 'cls_loss': cls_loss, 'jepa_loss':jepa_loss}
 
-    return total_loss, accuracy, jepa_loss, cls_loss
+    return outputs
 
 
 

@@ -41,7 +41,7 @@ class MLPEncoder(BaseEncoder):
     '''
     MLP encoder
     '''
-    def __init__(self, latent_dim=64, activation='relu', normalize=True, input_dim=28*28, hidden_dim = 256):
+    def __init__(self, latent_dim=64, activation='relu', normalize=True, input_dim=28*28, hidden_dim=256):
         super().__init__(latent_dim=latent_dim, activation=activation, normalize=normalize)
         self.net = nn.Sequential(
             nn.Flatten(),
@@ -57,10 +57,10 @@ class CNNEncoder(BaseEncoder):
     '''
     CNN encoder
     '''
-    def __init__(self, latent_dim=64, activation='relu', normalize=True, hidden_dim = 256):
+    def __init__(self, latent_dim=64, activation='relu', normalize=True, hidden_dim=256):
         super().__init__(latent_dim=latent_dim, activation=activation, normalize=normalize)
         self.net = nn.Sequential(
-            nn.Conv2d(1, 32, 3, stride=2, padding =1),  # 28->14
+            nn.Conv2d(1, 32, 3, stride=2, padding=1),  # 28->14
             self.activation,
             nn.Conv2d(32, 64, 3, stride=2, padding=1), # 14-> 7
             self.activation,
@@ -81,31 +81,31 @@ class ViTEncoder(BaseEncoder):
     ViT encoder
     '''
     def __init__(self, latent_dim=64, activation='relu', normalize=True,
-                 image_size=28, patch_size=7, dim=128,
+                 image_size=28, patch_size=7, d_model=128,
                  depth=4, nhead=4, mlp_dim=256, use_cls_token=False):
         super().__init__(latent_dim=latent_dim, activation=activation, normalize=normalize)
         self.use_cls_token = use_cls_token
         assert image_size % patch_size == 0 # image_size must be divisible by image_size
         num_patches = (image_size // patch_size) ** 2
-        self.patch_embed = nn.Conv2d(1, dim, kernel_size=patch_size, stride=patch_size)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, dim))
-        self.pos_embed = nn.Parameter(torch.randn(1, num_patches + 1, dim))
+        self.patch_embed = nn.Conv2d(1, d_model, kernel_size=patch_size, stride=patch_size)
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model))
+        self.pos_embed = nn.Parameter(torch.randn(1, num_patches + 1, d_model))
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=dim, nhead=nhead, dim_feedforward=mlp_dim,
+        encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=mlp_dim,
                                                    batch_first=True, activation='relu')
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
 
-        self.norm = nn.LayerNorm(dim)
+        self.norm = nn.LayerNorm(d_model)
 
-        self.head = nn.Linear(dim, self.latent_dim)
+        self.head = nn.Linear(d_model, self.latent_dim)
 
     def forward(self, x):
         batch_size = x.shape[0]
-        x = self.patch_embed(x)  # (batch_size, dim, H, W), H*W = num_patches
-        x = x.flatten(2).transpose(1, 2) # (batch_size, num_patches, dim)
+        x = self.patch_embed(x)  # (batch_size, d_model, H, W), H*W = num_patches
+        x = x.flatten(2).transpose(1, 2) # (batch_size, num_patches, d_model)
 
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1) # from [1, 1, dim] to [batch_size, 1, dim]
-        x = torch.cat([cls_tokens, x], dim=1) # [batch_size, num_patches+1, dim]
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1) # from [1, 1, d_model] to [batch_size, 1, d_model]
+        x = torch.cat([cls_tokens, x], dim=1) # [batch_size, num_patches+1, d_model]
         x = x + self.pos_embed
 
         x = self.transformer(x)
