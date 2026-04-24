@@ -112,7 +112,7 @@ def evaluate(
         model: IJepaModel,
         loader: DataLoader,
         device: torch.device,
-        cls_weight: float,
+    cls_loss_weight: float,
 ):
     model.eval()
     total_loss = 0.0
@@ -129,7 +129,7 @@ def evaluate(
             losses = compute_loss(predicted_latent, target_latent,
                                   target_labels=target_labels,
                                   class_logits=class_logits,
-                                  cls_weight=cls_weight)
+                                  cls_loss_weight=cls_loss_weight)
 
             total_loss += losses["total_loss"].item()
             jepa_loss += losses["jepa_loss"].item()
@@ -174,6 +174,17 @@ def main():
         data_root=config.data.data_root,
         num_workers=config.data.num_workers,
     )
+    seen_test_loader = None
+    if test_ops != config.data.ops:
+        seen_test_loader = get_arithmetic_dataloader(
+            dataset_name=config.data.dataset,
+            batch_size=config.data.batch_size,
+            ops=config.data.ops,
+            is_train=False,
+            data_root=config.data.data_root,
+            num_workers=config.data.num_workers,
+        )
+
     test_loader = get_arithmetic_dataloader(
         dataset_name=config.data.dataset,
         batch_size=config.data.batch_size,
@@ -184,6 +195,7 @@ def main():
     )
 
     if config.run.overfit > 0:
+        # this section is not needed.
         snap = FixedSampleDataset(train_loader.dataset, config.run.overfit)
         bs = min(config.data.batch_size, config.run.overfit)
         train_loader = DataLoader(
@@ -198,6 +210,7 @@ def main():
             shuffle=False,
             num_workers=config.data.num_workers,
         )
+        seen_test_loader = test_loader
         print(f"[overfit] snapshotted {config.run.overfit} samples (train == eval set)")
 
     # ---- model / optim ---- #
@@ -208,27 +221,25 @@ def main():
     else:
         model_ops = config.data.ops
 
-    encoder_kwargs = {
-            'normalize': config.model.encoder_normalize,
-            'activation': config.model.activation
+    encoder_kwargs: dict[str, Any] = {
+        'normalize': config.model.encoder_normalize,
+        'activation': config.model.activation
     }
     if config.model.encoder_type.lower() in ['mlp', 'cnn']:
-        encoder_kwargs = {
-            'hidden_dim': config.model.encoder_hidden_dim
-        }
+        encoder_kwargs['hidden_dim'] = config.model.encoder_hidden_dim
 
     elif config.model.encoder_type.lower() == 'vit':
-        encoder_kwargs = {
+        encoder_kwargs.update({
             "patch_size": config.model.patch_size,
             "d_model": config.model.d_model,
             "depth": config.model.depth,
             "nhead": config.model.nhead,
             "mlp_dim": config.model.mlp_dim,
             "use_cls_token": config.model.use_cls_token
-        }
+        })
     classifier_kwargs = {'num_classes': config.model.num_classes,
                          'hidden_dim': config.model.classifier_hidden_dim}
-    kwargs = {'encoder_kwargs': encoder_kwargs, 'classifier_kwargs': classifier_kwargs}
+    kwargs: dict[str, Any] = {'encoder_kwargs': encoder_kwargs, 'classifier_kwargs': classifier_kwargs}
 
     model = IJepaModel(
         ops=model_ops,
@@ -239,14 +250,14 @@ def main():
         predictor_hidden_dim=tuple(config.model.predictor_hidden_dim),
         predictor_dropout=config.model.predictor_dropout,
         predictor_normalize=config.model.predictor_normalize,
-        use_class_head=config.optim.cls_weight > 0,
+        joint_cls_training=config.optim.cls_weight > 0,
         momentum =config.model.momentum,
         **kwargs
     ).to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=config.optim.lr, weight_decay=config.optim.weight_decay)
-    probe_optimizer = optim.AdamW(model.class_head.parameters(),
-                                  lr=config.optim.lr, weight_decay=config.optim.weight_decay)
+    cls_probe_optimizer = optim.AdamW(model.class_head.parameters(),
+                                      lr=config.optim.lr, weight_decay=config.optim.weight_decay)
 
     # ----- train ----- #
     epochs = config.run.epochs
@@ -268,7 +279,7 @@ def main():
             predicted_latent, target_latent, class_logits = model(context_img, target_img, actions)
             losses = compute_loss(predicted_latent, target_latent,
                                 target_labels=target_labels, class_logits=class_logits,
-                                cls_weight=config.optim.cls_weight)
+                                cls_loss_weight=config.optim.cls_weight)
 
             optimizer.zero_grad(set_to_none=True)
             if  config.optim.cls_weight > 0.0:
@@ -280,9 +291,9 @@ def main():
                 optimizer.step()
                 model.update_target_encoder()
 
-                probe_optimizer.zero_grad(set_to_none=True)
+                cls_probe_optimizer.zero_grad(set_to_none=True)
                 losses['cls_loss'].backward()
-                probe_optimizer.step()
+                cls_probe_optimizer.step()
 
             total_loss += losses['total_loss'].item()
             jepa_loss += losses['jepa_loss'].item()
@@ -296,12 +307,45 @@ def main():
             'accuracy': accuracy / num_batches
         }
         test_stats = evaluate(model, test_loader, device, config.optim.cls_weight)
-        print(
-            f"[epoch {epoch:3d}] "
-            f"train total loss={train_stats['total_loss']:.4f}, train jepa loss={train_stats['jepa_loss']:.4f}, acc={train_stats['accuracy']:.4f}  "
-            f"test total loss={test_stats['total_loss']:.4f}, test jepa loss={test_stats['jepa_loss']:.4f}, acc={test_stats['accuracy']:.4f}  "
+        seen_stats = None
+        if seen_test_loader is not None:
+            seen_stats = evaluate(model, seen_test_loader, device, config.optim.cls_weight)
+
+        log_lines = [
+            f"[epoch {epoch:3d}]",
+            (
+                f"  {'train':<11}"
+                f"total={train_stats['total_loss']:.4f} "
+                f"jepa={train_stats['jepa_loss']:.4f} "
+                f"cls={train_stats['cls_loss']:.4f} "
+                f"acc={train_stats['accuracy']:.4f}"
+            ),
+        ]
+        if seen_stats is not None:
+            log_lines.append(
+                (
+                    f"  {'test seen':<11}"
+                    f"total={seen_stats['total_loss']:.4f} "
+                    f"jepa={seen_stats['jepa_loss']:.4f} "
+                    f"cls={seen_stats['cls_loss']:.4f} "
+                    f"acc={seen_stats['accuracy']:.4f}"
+                )
+            )
+        log_lines.append(
+            (
+                f"  {'test unseen':<11}"
+                f"total={test_stats['total_loss']:.4f} "
+                f"jepa={test_stats['jepa_loss']:.4f} "
+                f"cls={test_stats['cls_loss']:.4f} "
+                f"acc={test_stats['accuracy']:.4f}"
+            )
         )
-        history.append({"epoch": epoch, "train": train_stats, "test": test_stats})
+        print("\n".join(log_lines))
+
+        epoch_record = {"epoch": epoch, "train": train_stats, "test": test_stats}
+        if seen_stats is not None:
+            epoch_record["test_seen_ops"] = seen_stats
+        history.append(epoch_record)
         (run_dir / "history.json").write_text(json.dumps(history, indent=2))
 
         if test_stats["accuracy"] > best_test_acc:

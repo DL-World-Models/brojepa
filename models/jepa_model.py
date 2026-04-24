@@ -58,12 +58,12 @@ class IJepaModel(nn.Module):
             predictor_hidden_dim: tuple[int, int] = (256, 256),
             predictor_dropout: float = 0.2,
             predictor_normalize: bool = True,
-            use_class_head: bool = True,
+            joint_cls_training: bool = True,
             momentum: float = 0.99,
             **kwargs: dict[str, dict] #
         )-> None:
         super().__init__()
-        self.use_class_head = use_class_head
+        self.joint_cls_training = joint_cls_training
         self.op_embed_dim = op_embed_dim
         self.momentum = momentum
 
@@ -81,7 +81,7 @@ class IJepaModel(nn.Module):
                                             hidden_dim=predictor_hidden_dim, dropout=predictor_dropout,
                                             normalize=predictor_normalize)
         classifier_kwargs = kwargs.get('classifier_kwargs', {})
-        self.class_head = ClassHead(latent_dim=latent_dim, **classifier_kwargs) #if use_class_head else None
+        self.class_head = ClassHead(latent_dim=latent_dim, **classifier_kwargs)
         self._init_target_encoder()
 
     def _init_target_encoder(self):
@@ -99,27 +99,21 @@ class IJepaModel(nn.Module):
             target_latent = self.target_encoder(target_images)
         actions_embedded = self.op_embed(actions)
         predicted_latent = self.jepa_predictor(context_latent, actions_embedded)
-        #class_logits = None
-        if self.use_class_head:
+        if self.joint_cls_training:
             class_logits = self.class_head(predicted_latent)
-        else:  # if classifier is not used for supervision, it is used as a probe
+        else:  # probe-only mode: keep classification gradients out of JEPA latents
             class_logits = self.class_head(predicted_latent.detach())
 
         return predicted_latent, target_latent, class_logits
 
-def compute_loss(predicted_latent, target_latent, target_labels=None, class_logits=None, cls_weight=0.0):
+def compute_loss(predicted_latent, target_latent, target_labels=None, class_logits=None, cls_loss_weight=0.0):
 
     jepa_loss = F.mse_loss(predicted_latent, target_latent, reduction='mean')
-    #if class_logits is not None and target_labels is not None and cls_weight > 0.0:
-    #if cls_weight > 0.0:
     cls_loss = F.cross_entropy(class_logits, target_labels, reduction="mean")
     predicted_classes = torch.argmax(class_logits, dim=-1)
     accuracy = (predicted_classes == target_labels).float().mean()
-    #else:
-    #    cls_loss = predicted_latent.new_tensor(0.0)
-    #    accuracy = predicted_latent.new_tensor(0.0)
 
-    total_loss = jepa_loss + cls_loss * cls_weight
+    total_loss = jepa_loss + cls_loss * cls_loss_weight
     outputs = {'total_loss': total_loss, 'accuracy': accuracy, 'cls_loss': cls_loss, 'jepa_loss':jepa_loss}
 
     return outputs
