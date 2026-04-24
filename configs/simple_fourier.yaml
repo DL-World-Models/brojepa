@@ -1,7 +1,7 @@
 data:
   dataset: MNIST
   ops: [1, 2, -1, -2]
-  test_ops: [3, 4]  # Unseen operations for testing generalization
+  test_ops: [0]  # Unseen operations for testing generalization
   batch_size: 128
   num_workers: 0
   data_root: ./data
