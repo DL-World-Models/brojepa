@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+import argparse
 
 
 @dataclass(slots=True)
@@ -25,11 +26,33 @@ class ModelConfig:
     mlp_hidden: int = 256
     op_embedding_type: str = "embedding"  # "embedding", "linear", or "fourier"
 
+    encoder_type: str = "cnn"  # "cnn", "mlp", or "vit"
+    latent_dim: int = 64
+    encoder_normalize: bool = True
+    activation: str = "relu"
+    encoder_hidden_dim: int = 256
+
+    patch_size: int = 7
+    d_model: int = 128
+    depth: int = 4
+    nhead: int = 4
+    mlp_dim: int = 256
+    use_cls_token: bool = False
+
+    predictor_dropout: float = 0.2
+    predictor_hidden_dim: list[int] = field(default_factory=lambda: [256, 256])
+    predictor_normalize: bool = True
+
+    classifier_hidden_dim: int = 64
+
+    momentum: float = 0.99
+
 
 @dataclass(slots=True)
 class OptimConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-4
+    cls_weight: float = 0.0
 
 
 @dataclass(slots=True)
@@ -73,10 +96,29 @@ class ExperimentConfig:
             op_embed_dim=int(model_raw.get("op_embed_dim", 32)),
             mlp_hidden=int(model_raw.get("mlp_hidden", 256)),
             op_embedding_type=str(model_raw.get("op_embedding_type", "embedding")),
+
+            encoder_type=str(model_raw.get("encoder_type", "cnn")),
+            latent_dim=int(model_raw.get("latent_dim", 64)),
+            encoder_normalize=bool(model_raw.get("encoder_normalize", True)),
+            activation=str(model_raw.get("activation", "relu")),
+            patch_size=int(model_raw.get("patch_size", 7)),
+            d_model=int(model_raw.get("d_model", 128)),
+            depth=int(model_raw.get("depth", 4)),
+            nhead=int(model_raw.get("nhead", 4)),
+            mlp_dim=int(model_raw.get("mlp_dim", 256)),
+            use_cls_token=bool(model_raw.get("use_cls_token", False)),
+
+            predictor_dropout=float(model_raw.get("predictor_dropout", 0.2)),
+            predictor_hidden_dim=model_raw.get("predictor_hidden_dim",[256, 256]),
+            predictor_normalize=bool(model_raw.get("predictor_normalize", True)),
+
+            classifier_hidden_dim=int(model_raw.get("classifier_hidden_dim", 64)),
+            momentum=float(model_raw.get("momentum", 0.99)),
         )
         optim = OptimConfig(
             lr=float(optim_raw.get("lr", 1e-3)),
             weight_decay=float(optim_raw.get("weight_decay", 1e-4)),
+            cls_weight=float(optim_raw.get("cls_weight", 0.0))
         )
         run = RunConfig(
             epochs=int(run_raw.get("epochs", 10)),
@@ -141,3 +183,32 @@ def apply_cli_overrides(
         setattr(section, field_name, value)
 
     return config
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser()
+    p.add_argument("--config", type=str, default="configs/resnet_baseline.yaml")
+    p.add_argument("--dataset", type=str, default=None, choices=["MNIST", "EMNIST"])
+    p.add_argument("--ops", type=int, nargs="+", default=None)
+    p.add_argument("--test-ops", type=int, nargs="+", default=None)
+    p.add_argument("--model-name", type=str, default=None)
+    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--data-root", type=str, default=None)
+    p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--lr", type=float, default=None)
+    p.add_argument("--weight-decay", type=float, default=None)
+    p.add_argument("--num-classes", type=int, default=None)
+    p.add_argument("--op-embed-dim", type=int, default=None)
+    p.add_argument("--mlp-hidden", type=int, default=None)
+    p.add_argument("--op-embedding-type", type=str, default=None)
+    p.add_argument("--num-workers", type=int, default=None)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--runs-dir", type=str, default=None)
+    p.add_argument("--tag", type=str, default=None)
+    p.add_argument(
+        "--overfit",
+        type=int,
+        default=None,
+        help="If > 0, train on a deterministic snapshot of N samples "
+        "(sanity check that the model + loop can drive loss to ~0).",
+    )
+    return p.parse_args()
