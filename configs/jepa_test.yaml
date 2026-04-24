@@ -1,7 +1,7 @@
 data:
   dataset: MNIST
   ops: [1, 2, -1, -2]
-  test_ops: [-1, -2]  # Subset of seen ops for embedding mode
+  test_ops: [+3, -3]  # Subset of seen ops for embedding mode
   batch_size: 128
   num_workers: 0
   data_root: ./data
@@ -9,14 +9,14 @@ data:
 model:
   # for action embedding
   op_embed_dim: 32
-  op_embedding_type: 'linear'
+  op_embedding_type: "hybrid" #'linear'
 
   # for encoder
   encoder_type: 'cnn' # 'cnn', 'mlp', 'vit'
   latent_dim: 64
 
   # for 'mlp' or 'cnn' encoder
-  encoder_normalize: True
+  encoder_normalize: False
   activation: 'relu'
   encoder_hidden_dim: 256
 
@@ -43,11 +43,11 @@ model:
 optim:
   lr: 1e-3
   weight_decay: 1e-4
-  cls_weight: 0.0001 # weight for classification supervision
+  cls_weight: 0.0 # weight for classification supervision
 
 
 run:
-  epochs: 10
+  epochs: 2
   seed: 42
   runs_dir: runs/jepa
   tag: encoder

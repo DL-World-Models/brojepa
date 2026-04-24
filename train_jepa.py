@@ -21,6 +21,7 @@ from tqdm import tqdm
 import json
 
 import torch
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
@@ -28,6 +29,84 @@ from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
 from utils.experiment_config import apply_cli_overrides, load_experiment_config, parse_args
 from models.jepa_model import IJepaModel, compute_loss
 from utils.common import get_device, set_seed, build_run_dir, git_hash
+
+@torch.no_grad()
+def collect_latent_diagnostics(
+        model: IJepaModel,
+        dataloader: DataLoader,
+        device: torch.device,
+        num_classes: int,
+) -> dict[str, torch.tensor]:
+    pred_latents = {i:[] for i in range(num_classes)}
+    target_latents = {i:[] for i in range(num_classes)}
+
+    for batch in dataloader:
+        contex_img = batch['ctx_img'].to(device,  non_blocking=True)
+        target_img = batch['tgt_img'].to(device, non_blocking=True)
+        actions = batch['op'].to(device, non_blocking=True)
+        target_labels = batch['tgt_label'].to(device, non_blocking=True)
+        pred_latent, target_latent, class_logits = model(contex_img, target_img, actions)
+        for label in target_labels.unique():
+            label_int = int(label.item())
+            mask = (target_labels == label_int)
+            pred_latents[label_int].append(pred_latent[mask])
+            target_latents[label_int].append(target_latent[mask])
+    pred_latents = {k: torch.cat(v, dim=0) for k, v in pred_latents.items() if len(v) > 0}
+    target_latents = {k: torch.cat(v, dim=0) for k, v in target_latents.items() if len(v) > 0}
+
+    pred_latents_mean = torch.stack(
+        [pred_latents[k].mean(dim=0) for k in range(num_classes)]
+    )
+    pred_latents_var = torch.stack(
+        [pred_latents[k].var(dim=0, unbiased=False) for k in range(num_classes)]
+    )
+    target_latents_mean = torch.stack(
+        [target_latents[k].mean(dim=0) for k in range(num_classes)]
+    )
+    target_latents_var = torch.stack(
+        [target_latents[k].var(dim=0, unbiased=False) for k in range(num_classes)]
+    )
+
+    return {
+        'pred_latents_mean': pred_latents_mean,
+        'pred_latents_var': pred_latents_var,
+        'target_latents_mean': target_latents_mean,
+        'target_latents_var': target_latents_var
+    }
+def latent_metrics(
+        pred_latents_mean: torch.tensor,
+        pred_latents_var: torch.tensor,
+        target_latents_mean: torch.tensor,
+        target_latents_var: torch.tensor
+) -> dict[str, float]:
+    pred_norm = F.normalize(pred_latents_mean, dim=1)
+    cls_similarity_pred = pred_norm @ pred_norm.T
+    mask = ~ torch.eye(pred_norm.shape[0], dtype=torch.bool).to(pred_norm.device)
+    cls_similarity_pred_mean = cls_similarity_pred[mask].mean()
+
+    target_norm = F.normalize(target_latents_mean, dim=1)
+    cls_similarity_target = target_norm @ target_norm.T
+    cls_similarity_target_mean = cls_similarity_target[mask].mean()
+
+    pair_similarity = F.cosine_similarity(pred_norm, target_norm, dim=1)
+
+    mean_feature_var_pred = pred_latents_var.mean(dim=1)
+    min_feature_var_pred = pred_latents_var.min(dim=1)
+
+    mean_feature_var_target = target_latents_var.mean(dim=1)
+    min_feature_var_target = target_latents_var.min(dim=1)
+
+    return {
+        'cls_similarity_pred': cls_similarity_pred,
+        'cls_similarity_target': cls_similarity_target,
+        'cls_similarity_pred_mean': cls_similarity_pred_mean,
+        'cls_similarity_target_mean': cls_similarity_target_mean,
+        'pair_similarity': pair_similarity,
+        'mean_feature_var_pred': mean_feature_var_pred,
+        'min_feature_var_pred': min_feature_var_pred,
+        'mean_feature_var_target': mean_feature_var_target,
+        'min_feature_var_target': min_feature_var_target
+    }
 
 def evaluate(
         model: IJepaModel,
@@ -166,6 +245,8 @@ def main():
     ).to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=config.optim.lr, weight_decay=config.optim.weight_decay)
+    probe_optimizer = optim.AdamW(model.class_head.parameters(),
+                                  lr=config.optim.lr, weight_decay=config.optim.weight_decay)
 
     # ----- train ----- #
     epochs = config.run.epochs
@@ -190,9 +271,18 @@ def main():
                                 cls_weight=config.optim.cls_weight)
 
             optimizer.zero_grad(set_to_none=True)
-            losses['total_loss'].backward()
-            optimizer.step()
-            model.update_target_encoder()
+            if  config.optim.cls_weight > 0.0:
+                losses['total_loss'].backward()
+                optimizer.step()
+                model.update_target_encoder()
+            else:
+                losses['jepa_loss'].backward()
+                optimizer.step()
+                model.update_target_encoder()
+
+                probe_optimizer.zero_grad(set_to_none=True)
+                losses['cls_loss'].backward()
+                probe_optimizer.step()
 
             total_loss += losses['total_loss'].item()
             jepa_loss += losses['jepa_loss'].item()
@@ -237,6 +327,17 @@ def main():
     )
     print(f"[done] best test acc={best_test_acc:.4f}{ops_note}  artifacts in {run_dir}")
 
+    # check the latent at the end of training
+    outputs = collect_latent_diagnostics(model, train_loader, device, config.model.num_classes)
+    metrics = latent_metrics(
+        outputs['pred_latents_mean'],
+        outputs['pred_latents_var'],
+        outputs['target_latents_mean'],
+        outputs['target_latents_var']
+    )
+    print(f"================Checking the latent metrics=============")
+    for k, v in metrics.items():
+        print(f"{k}: {v}")
 
 if __name__ == "__main__":
     main()
