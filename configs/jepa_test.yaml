@@ -38,16 +38,24 @@ model:
   num_classes: 10
 
   # EMA update rate for targe_encoder
-  momentum: 0.99
+  momentum: 0.9996
 
 optim:
-  lr: 1e-3
-  weight_decay: 1e-4
-  cls_weight: 1 # weight for classification supervision
+  lr: 1e-4
+  weight_decay: 0
+  # weight for classification supervision, if zero is passed, 
+  # the classification gradient will not be backpropagated, but the cls_loss will still be computed and logged for diagnostics
+  # classification head is still trained to check the quality of the learned representation, but it won't influence the representation learning process
+  cls_weight: 0 
 
 
 run:
-  epochs: 2
+  # Classification warmup before JEPA phase.
+  warmup_epochs: 3
+  warmup_lr: 1e-4  # null to reuse optim.lr
+  freeze_context_post_warmup: True  # freeze context encoder after warmup completes
+  epochs: 10
   seed: 42
   runs_dir: runs/jepa
-  tag: encoder
+  tag: test
+

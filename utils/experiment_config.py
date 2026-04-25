@@ -58,6 +58,9 @@ class OptimConfig:
 @dataclass(slots=True)
 class RunConfig:
     epochs: int = 10
+    warmup_epochs: int = 0
+    warmup_lr: float | None = None
+    freeze_context_post_warmup: bool = False
     seed: int = 42
     runs_dir: str = "runs/baseline"
     tag: str = "run"
@@ -122,11 +125,22 @@ class ExperimentConfig:
         )
         run = RunConfig(
             epochs=int(run_raw.get("epochs", 10)),
+            warmup_epochs=int(run_raw.get("warmup_epochs", 0)),
+            warmup_lr=(
+                float(run_raw["warmup_lr"])
+                if run_raw.get("warmup_lr") is not None
+                else None
+            ),
+            freeze_context_post_warmup=bool(run_raw.get("freeze_context_post_warmup", False)),
             seed=int(run_raw.get("seed", 42)),
             runs_dir=run_raw.get("runs_dir", "runs/baseline"),
             tag=run_raw.get("tag", "run"),
             overfit=int(run_raw.get("overfit", 0)),
         )
+
+        # Backward-compatibility for earlier typoed top-level key.
+        if run.warmup_epochs == 0 and bool(raw.get("warnmup_encoders", False)):
+            run.warmup_epochs = 1
         return cls(data=data, model=model, optim=optim, run=run)
 
     def to_dict(self) -> dict[str, Any]:
@@ -169,6 +183,9 @@ def apply_cli_overrides(
         "lr": ("optim", "lr"),
         "weight_decay": ("optim", "weight_decay"),
         "epochs": ("run", "epochs"),
+        "warmup_epochs": ("run", "warmup_epochs"),
+        "warmup_lr": ("run", "warmup_lr"),
+        "freeze_context_post_warmup": ("run", "freeze_context_post_warmup"),
         "seed": ("run", "seed"),
         "runs_dir": ("run", "runs_dir"),
         "tag": ("run", "tag"),
@@ -194,6 +211,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--data-root", type=str, default=None)
     p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--warmup-epochs", type=int, default=None)
+    p.add_argument("--warmup-lr", type=float, default=None)
+    p.add_argument("--freeze-context-post-warmup", action="store_true", default=None)
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--weight-decay", type=float, default=None)
     p.add_argument("--num-classes", type=int, default=None)

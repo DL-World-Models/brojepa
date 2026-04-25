@@ -88,6 +88,11 @@ class IJepaModel(nn.Module):
         self.target_encoder.load_state_dict(self.context_encoder.state_dict())
         for param in self.target_encoder.parameters():
             param.requires_grad = False
+
+    @torch.no_grad()
+    def sync_target_encoder(self):
+        self._init_target_encoder()
+
     @torch.no_grad()
     def update_target_encoder(self):
         for target_param, context_param in zip(self.target_encoder.parameters(), self.context_encoder.parameters()):

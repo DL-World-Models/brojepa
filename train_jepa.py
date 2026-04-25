@@ -142,6 +142,34 @@ def evaluate(
         "accuracy": accuracy / num_batches,
         "cls_loss": cls_loss / num_batches}
 
+
+def evaluate_classification(
+        model: IJepaModel,
+        loader: DataLoader,
+        device: torch.device,
+):
+    model.eval()
+    total_cls_loss = 0.0
+    accuracy = 0.0
+    num_batches = len(loader)
+    with torch.no_grad():
+        for batch in loader:
+            context_img = batch["ctx_img"].to(device, non_blocking=True)
+            ctx_labels = batch["ctx_label"].to(device, non_blocking=True)
+            context_latent = model.context_encoder(context_img)
+            class_logits = model.class_head(context_latent)
+            cls_loss = F.cross_entropy(class_logits, ctx_labels, reduction="mean")
+            pred = torch.argmax(class_logits, dim=-1)
+            batch_acc = (pred == ctx_labels).float().mean()
+
+            total_cls_loss += cls_loss.item()
+            accuracy += batch_acc.item()
+
+    return {
+        "cls_loss": total_cls_loss / num_batches,
+        "accuracy": accuracy / num_batches,
+    }
+
 def main():
     # ---- config------ #
     # Get the hyperparameters' values from the configure file #
@@ -258,10 +286,81 @@ def main():
     optimizer = optim.AdamW(model.parameters(), lr=config.optim.lr, weight_decay=config.optim.weight_decay)
     cls_probe_optimizer = optim.AdamW(model.class_head.parameters(),
                                       lr=config.optim.lr, weight_decay=config.optim.weight_decay)
+    num_batches = len(train_loader)
+
+    # ---- optional warmup: classification pretraining before JEPA ---- #
+    warmup_epochs = max(0, int(config.run.warmup_epochs))
+    if warmup_epochs > 0:
+        warmup_lr = config.run.warmup_lr if config.run.warmup_lr is not None else config.optim.lr
+        freeze_context_post_warmup = config.run.freeze_context_post_warmup
+        
+        # During warmup, both encoders and class head are trainable
+        warmup_params = list(model.context_encoder.parameters()) + list(model.class_head.parameters())
+        warmup_optimizer = optim.AdamW(warmup_params, lr=warmup_lr, weight_decay=config.optim.weight_decay)
+        print(
+            f"[warmup] enabled epochs={warmup_epochs} "
+            f"lr={warmup_lr:.2e} freeze_context_post_warmup={freeze_context_post_warmup} "
+            f"(encoder->class_head pretraining before JEPA)"
+        )
+
+        for warmup_epoch in range(1, warmup_epochs + 1):
+            model.train()
+            total_cls_loss = 0.0
+            total_acc = 0.0
+            pbar: Any = tqdm(
+                train_loader,
+                desc=f"warmup epoch {warmup_epoch}/{warmup_epochs}",
+                leave=False,
+            )
+            for batch in pbar:
+                context_img = batch["ctx_img"].to(device, non_blocking=True)
+                ctx_labels = batch["ctx_label"].to(device, non_blocking=True)
+
+                # Both encoders and class head are trainable during warmup
+                context_latent = model.context_encoder(context_img)
+
+                class_logits = model.class_head(context_latent)
+                cls_loss = F.cross_entropy(class_logits, ctx_labels, reduction="mean")
+                batch_acc = (torch.argmax(class_logits, dim=-1) == ctx_labels).float().mean()
+
+                warmup_optimizer.zero_grad(set_to_none=True)
+                cls_loss.backward()
+                warmup_optimizer.step()
+
+                total_cls_loss += cls_loss.item()
+                total_acc += batch_acc.item()
+
+            warmup_train_stats = {
+                "cls_loss": total_cls_loss / num_batches,
+                "accuracy": total_acc / num_batches,
+            }
+            warmup_test_stats = evaluate_classification(model, test_loader, device)
+
+            log_lines = [
+                f"[warmup {warmup_epoch:3d}/{warmup_epochs}]",
+                (
+                    f"  {'train':<15}"
+                    f"cls={warmup_train_stats['cls_loss']:.4f} "
+                    f"acc={warmup_train_stats['accuracy']:.4f}"
+                ),
+                (
+                    f"  {'test':<15}"
+                    f"cls={warmup_test_stats['cls_loss']:.4f} "
+                    f"acc={warmup_test_stats['accuracy']:.4f}"
+                ),
+            ]
+            print("\n".join(log_lines))
+
+        # Start JEPA phase from warmed online encoder/predictor weights.
+        model.sync_target_encoder()
+        # Freeze context encoder after warmup only if flag is set
+        if freeze_context_post_warmup:
+            for p in model.context_encoder.parameters():
+                p.requires_grad = False
+            print("[warmup->JEPA] context_encoder frozen after warmup")
 
     # ----- train ----- #
     epochs = config.run.epochs
-    num_batches = len(train_loader)
     history: list[dict[str, Any]] = []
     best_test_acc = 0.0  # why -1.0
     check_point = None
@@ -314,7 +413,7 @@ def main():
         log_lines = [
             f"[epoch {epoch:3d}]",
             (
-                f"  {'train':<11}"
+                f"  {'train':<15}"
                 f"total={train_stats['total_loss']:.4f} "
                 f"jepa={train_stats['jepa_loss']:.4f} "
                 f"cls={train_stats['cls_loss']:.4f} "
@@ -324,7 +423,7 @@ def main():
         if seen_stats is not None:
             log_lines.append(
                 (
-                    f"  {'test seen':<11}"
+                    f"  {'test seen op':<15}"
                     f"total={seen_stats['total_loss']:.4f} "
                     f"jepa={seen_stats['jepa_loss']:.4f} "
                     f"cls={seen_stats['cls_loss']:.4f} "
@@ -333,7 +432,7 @@ def main():
             )
         log_lines.append(
             (
-                f"  {'test unseen':<11}"
+                f"  {'test unseen op':<15}"
                 f"total={test_stats['total_loss']:.4f} "
                 f"jepa={test_stats['jepa_loss']:.4f} "
                 f"cls={test_stats['cls_loss']:.4f} "
@@ -372,16 +471,16 @@ def main():
     print(f"[done] best test acc={best_test_acc:.4f}{ops_note}  artifacts in {run_dir}")
 
     # check the latent at the end of training
-    outputs = collect_latent_diagnostics(model, train_loader, device, config.model.num_classes)
-    metrics = latent_metrics(
-        outputs['pred_latents_mean'],
-        outputs['pred_latents_var'],
-        outputs['target_latents_mean'],
-        outputs['target_latents_var']
-    )
-    print(f"================Checking the latent metrics=============")
-    for k, v in metrics.items():
-        print(f"{k}: {v}")
+    # outputs = collect_latent_diagnostics(model, train_loader, device, config.model.num_classes)
+    # metrics = latent_metrics(
+    #     outputs['pred_latents_mean'],
+    #     outputs['pred_latents_var'],
+    #     outputs['target_latents_mean'],
+    #     outputs['target_latents_var']
+    # )
+    # print(f"================Checking the latent metrics=============")
+    # for k, v in metrics.items():
+    #     print(f"{k}: {v}")
 
 if __name__ == "__main__":
     main()
