@@ -319,16 +319,14 @@ def main():
                 f"jepa={test_stats['jepa_loss']:.4f} "
                 f"cls={test_stats['cls_loss']:.4f} "
                 f"acc={test_stats['accuracy']:.4f}"
-            )
-        )
-        if rollout_stats is not None:
-            log_lines.append(
-                (
-                    f"  {'rollout unseen':<15}"
-                    f"cls_acc={rollout_stats['cls_accuracy']:.4f} "
-                    f"knn_acc={rollout_stats['knn_accuracy']:.4f}"
+                + (
+                    f" rollout_cls={rollout_stats['cls_accuracy']:.4f} "
+                    f"rollout_knn={rollout_stats['knn_accuracy']:.4f}"
+                    if rollout_stats is not None
+                    else ""
                 )
             )
+        )
         print("\n".join(log_lines))
 
         epoch_record = {"epoch": epoch, "train": train_stats, "test": test_stats}
