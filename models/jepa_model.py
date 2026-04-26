@@ -111,12 +111,38 @@ class IJepaModel(nn.Module):
 
         return predicted_latent, target_latent, class_logits
 
-def compute_loss(predicted_latent, target_latent, target_labels=None, class_logits=None, cls_loss_weight=0.0):
 
-    jepa_loss = F.mse_loss(predicted_latent, target_latent, reduction='mean')
+def compute_variance_reg(latent: torch.Tensor, gamma: float = 1.0) -> torch.Tensor:
+    epsilon = 1e-4
+    std_latent = torch.sqrt(latent.var(dim=0, unbiased=False) + epsilon)
+    v_reg = torch.relu(gamma - std_latent).mean()
+    return v_reg
+def compute_covariance_reg(latent: torch.Tensor) -> torch.Tensor:
+    batch_size, latent_dim = latent.shape ## latent is dimension of (Batch_size, latent_dim)
+    latent_zero_mean = latent - latent.mean(dim=0, keepdim=True)
+    cov_matrix_latent = (latent_zero_mean.T @ latent_zero_mean) / max(batch_size - 1, 1)
+    mask = ~ torch.eye(latent_dim, dtype=torch.bool, device=latent.device)
+    cov_reg = cov_matrix_latent[mask].pow(2).sum() / latent_dim
+    return cov_reg
+
+def compute_loss(predicted_latent, target_latent, target_labels=None, class_logits=None, cls_loss_weight=0.0,
+                 use_vic_reg=True, lamda=25, miu=25, nu=1.0, gamma=1.0):
+
+    inv_loss = F.mse_loss(predicted_latent, target_latent, reduction='mean')
     cls_loss = F.cross_entropy(class_logits, target_labels, reduction="mean")
     predicted_classes = torch.argmax(class_logits, dim=-1)
     accuracy = (predicted_classes == target_labels).float().mean()
+
+    if use_vic_reg:
+        v_reg_pred = compute_variance_reg(predicted_latent, gamma=gamma)
+        v_reg_target = compute_variance_reg(target_latent, gamma=gamma)
+        cov_reg_pred = compute_covariance_reg(predicted_latent)
+        cov_reg_target = compute_covariance_reg(target_latent)
+        jepa_loss = (lamda * inv_loss
+                     + miu * (v_reg_pred + v_reg_target)
+                     + nu * (cov_reg_pred + cov_reg_target))
+    else:
+        jepa_loss = inv_loss
 
     total_loss = jepa_loss + cls_loss * cls_loss_weight
     outputs = {'total_loss': total_loss, 'accuracy': accuracy, 'cls_loss': cls_loss, 'jepa_loss':jepa_loss}
