@@ -40,15 +40,6 @@ model:
   # EMA update rate for targe_encoder
   momentum: 0.99 #0.9996
 
-optim:
-#<<<<<<< Updated upstream
-  lr: 1e-4
-  weight_decay: 0
-  # weight for classification supervision, if zero is passed, 
-  # the classification gradient will not be backpropagated, but the cls_loss will still be computed and logged for diagnostics
-  # classification head is still trained to check the quality of the learned representation, but it won't influence the representation learning process
-  cls_weight: 0
-
   # for VIC_reg, the parameter values are taken from paper Bardes's VICReg paper (ICLR 2022)
   use_vic_reg: False #True
   lamda: 25  # weight for invariance reg, i.e. L2 loss between predicted and target latent
@@ -56,23 +47,26 @@ optim:
   nu: 1.0   # weight for covariance reg
   gamma: 1.0   # The hinge loss threshold for variance_reg
 
+optim:
+  lr: 1e-4
+  weight_decay: 0
+  # weight for classification supervision, if zero is passed, 
+  # the classification gradient will not be backpropagated, but the cls_loss will still be computed and logged for diagnostics
+  # classification head is still trained to check the quality of the learned representation, but it won't influence the representation learning process
+  cls_weight: 0
+
 
 run:
   # Classification warmup before JEPA phase.
   warmup_epochs: 0
   warmup_lr: 1e-4  # null to reuse optim.lr
   freeze_context_post_warmup: False #True  # freeze context encoder after warmup completes
-#=======
-  epochs: 10
+  epochs: 2
   seed: 42
   runs_dir: runs/jepa
   tag: test
 #  lr: 1e-3
 #  weight_decay: 1e-4
 #  cls_weight: 1.0 # weight for classification supervision
-
-
-#run:
-#>>>>>>> Stashed changes
 
 

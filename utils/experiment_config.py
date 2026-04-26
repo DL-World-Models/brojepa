@@ -47,18 +47,19 @@ class ModelConfig:
 
     momentum: float = 0.99
 
+    # VICReg parameters
+    use_vic_reg: bool = True
+    lamda: float = 25  # weight for invariance reg
+    miu: float = 25    # weight for variance reg
+    nu: float = 1.0    # weight for covariance reg
+    gamma: float = 1.0 # hinge loss threshold for variance reg
+
 
 @dataclass(slots=True)
 class OptimConfig:
     lr: float = 1e-3
     weight_decay: float = 1e-4
     cls_weight: float = 0.0
-
-    use_vic_reg: bool = True
-    lamda: float = 25
-    miu: float = 25
-    nu: float = 1.0
-    gamma: float = 1.0
 
 
 @dataclass(slots=True)
@@ -123,16 +124,16 @@ class ExperimentConfig:
 
             classifier_hidden_dim=int(model_raw.get("classifier_hidden_dim", 64)),
             momentum=float(model_raw.get("momentum", 0.99)),
+            use_vic_reg=bool(model_raw.get("use_vic_reg", True)),
+            lamda=float(model_raw.get("lamda", 25)),
+            miu=float(model_raw.get("miu", 25)),
+            nu=float(model_raw.get("nu", 1.0)),
+            gamma=float(model_raw.get("gamma", 1.0)),
         )
         optim = OptimConfig(
             lr=float(optim_raw.get("lr", 1e-3)),
             weight_decay=float(optim_raw.get("weight_decay", 1e-4)),
-            cls_weight=float(optim_raw.get("cls_weight", 0.0)),
-            use_vic_reg=bool(optim_raw.get("use_vic_reg", True)),
-            lamda=float(optim_raw.get("lamda", 25)),
-            miu=float(optim_raw.get("miu", 25)),
-            nu=float(optim_raw.get("nu", 1.0)),
-            gamma=float(optim_raw.get("gamma", 1.0))
+            cls_weight=float(optim_raw.get("cls_weight", 0.0))
         )
         run = RunConfig(
             epochs=int(run_raw.get("epochs", 10)),
