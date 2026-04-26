@@ -54,6 +54,12 @@ class OptimConfig:
     weight_decay: float = 1e-4
     cls_weight: float = 0.0
 
+    use_vic_reg: bool = True
+    lamda: float = 25
+    miu: float = 25
+    nu: float = 1.0
+    gamma: float = 1.0
+
 
 @dataclass(slots=True)
 class RunConfig:
@@ -121,7 +127,12 @@ class ExperimentConfig:
         optim = OptimConfig(
             lr=float(optim_raw.get("lr", 1e-3)),
             weight_decay=float(optim_raw.get("weight_decay", 1e-4)),
-            cls_weight=float(optim_raw.get("cls_weight", 0.0))
+            cls_weight=float(optim_raw.get("cls_weight", 0.0)),
+            use_vic_reg=bool(optim_raw.get("use_vic_reg", True)),
+            lamda=float(optim_raw.get("lamda", 25)),
+            miu=float(optim_raw.get("miu", 25)),
+            nu=float(optim_raw.get("nu", 1.0)),
+            gamma=float(optim_raw.get("gamma", 1.0))
         )
         run = RunConfig(
             epochs=int(run_raw.get("epochs", 10)),

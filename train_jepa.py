@@ -19,6 +19,7 @@ reproducible given the saved config + git hash.
 from typing import Any
 from tqdm import tqdm
 import json
+from collections.abc import Sequence
 
 import torch
 import torch.nn.functional as F
@@ -103,16 +104,16 @@ def latent_metrics(
         'cls_similarity_target_mean': cls_similarity_target_mean,
         'pair_similarity': pair_similarity,
         'mean_feature_var_pred': mean_feature_var_pred,
-        'min_feature_var_pred': min_feature_var_pred,
+        'min_feature_var_pred': min_feature_var_pred[0],
         'mean_feature_var_target': mean_feature_var_target,
-        'min_feature_var_target': min_feature_var_target
+        'min_feature_var_target': min_feature_var_target[0]
     }
 
 def evaluate(
         model: IJepaModel,
         loader: DataLoader,
         device: torch.device,
-    cls_loss_weight: float,
+        **kwargs
 ):
     model.eval()
     total_loss = 0.0
@@ -129,7 +130,8 @@ def evaluate(
             losses = compute_loss(predicted_latent, target_latent,
                                   target_labels=target_labels,
                                   class_logits=class_logits,
-                                  cls_loss_weight=cls_loss_weight)
+                                  **kwargs
+                                  )
 
             total_loss += losses["total_loss"].item()
             jepa_loss += losses["jepa_loss"].item()
@@ -142,6 +144,58 @@ def evaluate(
         "accuracy": accuracy / num_batches,
         "cls_loss": cls_loss / num_batches}
 
+@torch.no_grad()
+def rollout_evaluation(
+        model: IJepaModel,
+        loader: DataLoader,
+        device: torch.device,
+        test_ops:Sequence[int],
+        num_classes: int,
+) -> dict[str, float]:
+    '''
+    To test if the model can recursively learn the compositional relationship in addition:
+    E.g., +3 =f(f(f(+1)+1)+1), -3 =f(f(f(-1)-1)-1)
+    To use this evalution, the training ops must be the unit addition [+1, -1]
+    The test ops is a sacle*[+1, -1], e.g., [+3, -3]
+    '''
+    model.eval()
+    num_batches = len(loader)
+    knn_accuracy = 0.0
+    scale = abs(test_ops[0])
+    cls_accuracy = 0.0
+
+    for batch in loader:
+        context_img = batch["ctx_img"].to(device, non_blocking=True)
+        #target_img = batch["tgt_img"].to(device, non_blocking=True)
+        target_labels = batch["tgt_label"].to(device, non_blocking=True)
+        actions = batch["op"].to(device, non_blocking=True)
+
+        unit_actions = actions // scale
+        unit_actions_embedded = model.op_embed(unit_actions)
+        context_latent = model.context_encoder(context_img)
+        for _ in range(scale):
+            predicted_latent = model.jepa_predictor(context_latent, unit_actions_embedded)
+            context_latent = predicted_latent
+        # Accuracy calculated using ClassHead
+        class_logits = model.class_head(predicted_latent)
+        cls_loss = F.cross_entropy(class_logits, target_labels, reduction="mean")
+        pred_class = torch.argmax(class_logits, dim=-1)
+        cls_accuracy += (pred_class == target_labels).float().mean()
+
+        # Accuracy calculated using 1-nearest neighbor between the mean target latent and predicted latent
+        outputs = collect_latent_diagnostics(model, loader, device, num_classes)
+        prototypes = outputs["target_latents_mean"]
+        dists = torch.cdist(predicted_latent, prototypes)
+        pred_class = dists.argmin(dim=1)
+        knn_accuracy += (pred_class == target_labels).float().mean()
+
+    cls_accuracy /= num_batches
+    knn_accuracy /= num_batches
+    return {
+        "knn_accuracy": knn_accuracy,
+        "cls_accuracy": cls_accuracy,
+        "cls_loss": cls_loss,
+    }
 
 def evaluate_classification(
         model: IJepaModel,
@@ -267,7 +321,14 @@ def main():
         })
     classifier_kwargs = {'num_classes': config.model.num_classes,
                          'hidden_dim': config.model.classifier_hidden_dim}
-    kwargs: dict[str, Any] = {'encoder_kwargs': encoder_kwargs, 'classifier_kwargs': classifier_kwargs}
+    kwargs_model: dict[str, Any] = {'encoder_kwargs': encoder_kwargs, 'classifier_kwargs': classifier_kwargs}
+
+    kwargs_optim: dict[str, Any] = {'cls_loss_weight': config.optim.cls_weight,
+                                    'use_vic_reg': config.optim.use_vic_reg,
+                                    'lamda': config.optim.lamda,
+                                    'gamma': config.optim.gamma,
+                                    'miu': config.optim.miu,
+                                    'nu': config.optim.nu,}
 
     model = IJepaModel(
         ops=model_ops,
@@ -280,7 +341,7 @@ def main():
         predictor_normalize=config.model.predictor_normalize,
         joint_cls_training=config.optim.cls_weight > 0,
         momentum =config.model.momentum,
-        **kwargs
+        **kwargs_model
     ).to(device)
 
     optimizer = optim.AdamW(model.parameters(), lr=config.optim.lr, weight_decay=config.optim.weight_decay)
@@ -377,8 +438,10 @@ def main():
             actions = batch["op"].to(device, non_blocking=True)
             predicted_latent, target_latent, class_logits = model(context_img, target_img, actions)
             losses = compute_loss(predicted_latent, target_latent,
-                                target_labels=target_labels, class_logits=class_logits,
-                                cls_loss_weight=config.optim.cls_weight)
+                                  target_labels=target_labels,
+                                  class_logits=class_logits,
+                                  **kwargs_optim
+                                  )
 
             optimizer.zero_grad(set_to_none=True)
             if  config.optim.cls_weight > 0.0:
@@ -405,10 +468,10 @@ def main():
             'cls_loss': cls_loss / num_batches,
             'accuracy': accuracy / num_batches
         }
-        test_stats = evaluate(model, test_loader, device, config.optim.cls_weight)
+        test_stats = evaluate(model, test_loader, device, **kwargs_optim)
         seen_stats = None
         if seen_test_loader is not None:
-            seen_stats = evaluate(model, seen_test_loader, device, config.optim.cls_weight)
+            seen_stats = evaluate(model, seen_test_loader, device, **kwargs_optim)
 
         log_lines = [
             f"[epoch {epoch:3d}]",
@@ -470,17 +533,24 @@ def main():
     )
     print(f"[done] best test acc={best_test_acc:.4f}{ops_note}  artifacts in {run_dir}")
 
-    # check the latent at the end of training
-    # outputs = collect_latent_diagnostics(model, train_loader, device, config.model.num_classes)
-    # metrics = latent_metrics(
-    #     outputs['pred_latents_mean'],
-    #     outputs['pred_latents_var'],
-    #     outputs['target_latents_mean'],
-    #     outputs['target_latents_var']
-    # )
-    # print(f"================Checking the latent metrics=============")
-    # for k, v in metrics.items():
-    #     print(f"{k}: {v}")
+    #'''
+    #check the latent at the end of training
+    outputs = collect_latent_diagnostics(model, train_loader, device, config.model.num_classes)
+    metrics = latent_metrics(
+         outputs['pred_latents_mean'],
+         outputs['pred_latents_var'],
+         outputs['target_latents_mean'],
+         outputs['target_latents_var']
+     )
+    print(f"================Checking the latent metrics=============")
+    for k, v in metrics.items():
+         print(f"{k}: {v}")
+    #'''
+
+    rollout_accuracy = rollout_evaluation(model, test_loader, device, test_ops, config.model.num_classes)
+    print(f"=======Rollout test accuracy=============")
+    for k, v in rollout_accuracy.items():
+        print(f"{k}: {v}")
 
 if __name__ == "__main__":
     main()
