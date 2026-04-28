@@ -42,6 +42,8 @@ class ModelConfig:
     predictor_dropout: float = 0.2
     predictor_hidden_dim: list[int] = field(default_factory=lambda: [256, 256])
     predictor_normalize: bool = True
+    predictor_type: str = "mlp"
+    residual_scale_init: float = 0.1
 
     classifier_hidden_dim: int = 64
 
@@ -57,6 +59,8 @@ class ModelConfig:
     # Composition loss parameters
     use_composition_loss: bool = False
     composition_lambda: float = 0.0
+    composition_ops: list[int] = field(default_factory=list)
+    composition_detach_teacher: bool = True
 
 
 @dataclass(slots=True)
@@ -125,6 +129,8 @@ class ExperimentConfig:
             predictor_dropout=float(model_raw.get("predictor_dropout", 0.2)),
             predictor_hidden_dim=model_raw.get("predictor_hidden_dim",[256, 256]),
             predictor_normalize=bool(model_raw.get("predictor_normalize", True)),
+            predictor_type=str(model_raw.get("predictor_type", "mlp")),
+            residual_scale_init=float(model_raw.get("residual_scale_init", 0.1)),
 
             classifier_hidden_dim=int(model_raw.get("classifier_hidden_dim", 64)),
             momentum=float(model_raw.get("momentum", 0.99)),
@@ -135,6 +141,8 @@ class ExperimentConfig:
             gamma=float(model_raw.get("gamma", 1.0)),
             use_composition_loss=bool(model_raw.get("use_composition_loss", False)),
             composition_lambda=float(model_raw.get("composition_lambda", 0.0)),
+            composition_ops=[int(v) for v in model_raw.get("composition_ops", [])],
+            composition_detach_teacher=bool(model_raw.get("composition_detach_teacher", True)),
         )
         optim = OptimConfig(
             lr=float(optim_raw.get("lr", 1e-3)),
@@ -198,6 +206,13 @@ def apply_cli_overrides(
         "op_embed_dim": ("model", "op_embed_dim"),
         "mlp_hidden": ("model", "mlp_hidden"),
         "op_embedding_type": ("model", "op_embedding_type"),
+        "predictor_type": ("model", "predictor_type"),
+        "residual_scale_init": ("model", "residual_scale_init"),
+        "use_vic_reg": ("model", "use_vic_reg"),
+        "composition_lambda": ("model", "composition_lambda"),
+        "use_composition_loss": ("model", "use_composition_loss"),
+        "composition_detach_teacher": ("model", "composition_detach_teacher"),
+        "cls_weight": ("optim", "cls_weight"),
         "lr": ("optim", "lr"),
         "weight_decay": ("optim", "weight_decay"),
         "epochs": ("run", "epochs"),
@@ -238,6 +253,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--op-embed-dim", type=int, default=None)
     p.add_argument("--mlp-hidden", type=int, default=None)
     p.add_argument("--op-embedding-type", type=str, default=None)
+    p.add_argument("--predictor-type", type=str, default=None, choices=["mlp", "residual", "scaled_residual"])
+    p.add_argument("--residual-scale-init", type=float, default=None)
+    p.add_argument("--use-vic-reg", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--use-composition-loss", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--composition-lambda", type=float, default=None)
+    p.add_argument("--composition-detach-teacher", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--cls-weight", type=float, default=None)
     p.add_argument("--num-workers", type=int, default=None)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--runs-dir", type=str, default=None)

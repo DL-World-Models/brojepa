@@ -244,3 +244,32 @@ def evaluate_classification(
         "cls_loss": total_cls_loss / num_batches,
         "accuracy": accuracy / num_batches,
     }
+
+
+@torch.no_grad()
+def direct_knn_evaluation(
+        model: IJepaModel,
+        prototype_loader: DataLoader,
+        eval_loader: DataLoader,
+        device: torch.device,
+        num_classes: int,
+) -> dict[str, float]:
+    """Classify direct predicted latents by nearest target-encoder class prototype."""
+    model.eval()
+    outputs = collect_latent_diagnostics(model, prototype_loader, device, num_classes)
+    prototypes = outputs["target_latents_mean"]
+
+    accuracy = 0.0
+    num_batches = len(eval_loader)
+    for batch in eval_loader:
+        context_img = batch["ctx_img"].to(device, non_blocking=True)
+        target_img = batch["tgt_img"].to(device, non_blocking=True)
+        target_labels = batch["tgt_label"].to(device, non_blocking=True)
+        actions = batch["op"].to(device, non_blocking=True)
+
+        predicted_latent, _, _ = model(context_img, target_img, actions)
+        dists = torch.cdist(predicted_latent, prototypes)
+        pred_class = dists.argmin(dim=1)
+        accuracy += (pred_class == target_labels).float().mean()
+
+    return {"knn_accuracy": float(accuracy / num_batches)}

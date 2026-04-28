@@ -10,9 +10,23 @@ class JepaPredictor(nn.Module):
     A MLP model turning the context latent from Context encoder and action embedding from operation embedding into
     the latent vector of the predicted image class.
     '''
-    def __init__(self, latent_dim=64, op_embed_dim=32, hidden_dim=(256, 256), dropout=0.1, normalize=True):
+    def __init__(
+            self,
+            latent_dim=64,
+            op_embed_dim=32,
+            hidden_dim=(256, 256),
+            dropout=0.1,
+            normalize=True,
+            predictor_type: str = "mlp",
+            residual_scale_init: float = 0.1,
+        ):
         super().__init__()
         self.normalize = normalize
+        self.predictor_type = predictor_type
+        valid_predictor_types = {"mlp", "residual", "scaled_residual"}
+        if predictor_type not in valid_predictor_types:
+            raise ValueError(f"predictor_type must be one of {sorted(valid_predictor_types)}, got {predictor_type}")
+        self.residual_scale = nn.Parameter(torch.tensor(float(residual_scale_init)))
 
         self.net = nn.Sequential(
             nn.Linear(op_embed_dim + latent_dim, hidden_dim[0]),
@@ -23,10 +37,27 @@ class JepaPredictor(nn.Module):
             nn.Linear(hidden_dim[1], latent_dim)
         )
 
-    def forward(self, contex_latent, actions_embedded):
+    def _predict_one_step(self, contex_latent, actions_embedded):
         z = torch.cat([contex_latent, actions_embedded], dim=-1)
         z = self.net(z)
+        if self.predictor_type == "residual":
+            z = contex_latent + self.residual_scale * z
         return F.normalize(z, dim=-1) if self.normalize else z
+
+    def forward(self, contex_latent, actions_embedded, action_values=None, op_embed=None):
+        if self.predictor_type == "scaled_residual" and action_values is not None and op_embed is not None:
+            action_values = action_values.view(-1)
+            unit_actions = torch.where(
+                action_values < 0,
+                torch.full_like(action_values, -1),
+                torch.ones_like(action_values),
+            )
+            unit_actions_embedded = op_embed(unit_actions)
+            delta = self.net(torch.cat([contex_latent, unit_actions_embedded], dim=-1))
+            scale = action_values.abs().float().unsqueeze(-1)
+            z = contex_latent + scale * self.residual_scale * delta
+            return F.normalize(z, dim=-1) if self.normalize else z
+        return self._predict_one_step(contex_latent, actions_embedded)
 
 class ClassHead(nn.Module):
     '''
@@ -58,6 +89,8 @@ class IJepaModel(nn.Module):
             predictor_hidden_dim: tuple[int, int] = (256, 256),
             predictor_dropout: float = 0.2,
             predictor_normalize: bool = True,
+            predictor_type: str = "mlp",
+            residual_scale_init: float = 0.1,
             joint_cls_training: bool = True,
             momentum: float = 0.99,
             **kwargs: dict[str, dict] #
@@ -79,7 +112,9 @@ class IJepaModel(nn.Module):
 
         self.jepa_predictor = JepaPredictor(latent_dim=latent_dim, op_embed_dim=op_embed_dim,
                                             hidden_dim=predictor_hidden_dim, dropout=predictor_dropout,
-                                            normalize=predictor_normalize)
+                                            normalize=predictor_normalize,
+                                            predictor_type=predictor_type,
+                                            residual_scale_init=residual_scale_init)
         classifier_kwargs = kwargs.get('classifier_kwargs', {})
         self.class_head = ClassHead(latent_dim=latent_dim, **classifier_kwargs)
         self._init_target_encoder()
@@ -103,7 +138,12 @@ class IJepaModel(nn.Module):
         with torch.no_grad():
             target_latent = self.target_encoder(target_images)
         actions_embedded = self.op_embed(actions)
-        predicted_latent = self.jepa_predictor(context_latent, actions_embedded)
+        predicted_latent = self.jepa_predictor(
+            context_latent,
+            actions_embedded,
+            action_values=actions,
+            op_embed=self.op_embed,
+        )
         if self.joint_cls_training:
             class_logits = self.class_head(predicted_latent)
         else:  # probe-only mode: keep classification gradients out of JEPA latents
@@ -128,7 +168,7 @@ def compute_covariance_reg(latent: torch.Tensor) -> torch.Tensor:
 def compute_loss(predicted_latent, target_latent, target_labels=None, class_logits=None, cls_loss_weight=0.0,
                  use_vic_reg=True, lamda=25, miu=25, nu=1.0, gamma=1.0,
                  use_composition_loss=False, composition_lambda=0.0, model=None, context_latent=None, 
-                 training_ops=None, device=None):
+                 training_ops=None, composition_ops=None, composition_detach_teacher=True, device=None):
     """Compute JEPA training loss with optional VICReg regularization and composition consistency loss.
     
     Loss computation pipeline:
@@ -215,6 +255,8 @@ def compute_loss(predicted_latent, target_latent, target_labels=None, class_logi
             model=model,
             context_latent=context_latent,
             training_ops=training_ops,
+            composition_ops=composition_ops,
+            detach_teacher=composition_detach_teacher,
             device=device if device is not None else context_latent.device
         )
         jepa_loss = jepa_loss + composition_lambda * comp_loss
@@ -231,6 +273,8 @@ def compute_composition_loss(
     model,
     context_latent: torch.Tensor,
     training_ops: list[int],
+    composition_ops: list[int] | None,
+    detach_teacher: bool,
     device: torch.device,
 ) -> torch.Tensor:
     """Compute composition consistency loss.
@@ -256,7 +300,8 @@ def compute_composition_loss(
     num_comparisons = 0
     batch_size = context_latent.shape[0]  # Get batch size from context_latent
     
-    for op in training_ops:
+    ops_to_compare = composition_ops if composition_ops else training_ops
+    for op in ops_to_compare:
         if op in base_ops:
             continue  # Skip base operations themselves
         
@@ -277,6 +322,8 @@ def compute_composition_loss(
         z_seq = context_latent
         for _ in range(k):
             z_seq = model.jepa_predictor(z_seq, base_op_emb)
+        if detach_teacher:
+            z_seq = z_seq.detach()
         
         # Direct application: z_direct_k = g(z, k*base)
         op_tensor = torch.tensor([op], dtype=torch.float32, device=device)
@@ -284,8 +331,9 @@ def compute_composition_loss(
         op_emb = op_emb.expand(batch_size, -1)  # [B, op_embed_dim]
         z_direct = model.jepa_predictor(context_latent, op_emb)
         
-        # MSE loss between sequential and direct
-        loss = F.mse_loss(z_seq, z_direct, reduction='mean')
+        # Squared latent distance per sample. Using a per-vector distance keeps
+        # composition consistency from being diluted by latent dimensionality.
+        loss = (z_seq - z_direct).pow(2).sum(dim=-1).mean()
         if total_comp_loss is None:
             total_comp_loss = loss
         else:
@@ -299,7 +347,3 @@ def compute_composition_loss(
     total_comp_loss = total_comp_loss / num_comparisons
     
     return total_comp_loss
-
-
-
-

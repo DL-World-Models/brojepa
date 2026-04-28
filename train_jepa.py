@@ -33,6 +33,7 @@ from evaluation.metrics import (
     evaluate,
     rollout_evaluation,
     evaluate_classification,
+    direct_knn_evaluation,
     collect_latent_diagnostics,
     latent_metrics,
 )
@@ -146,7 +147,9 @@ def main():
 
     kwargs_comp: dict[str, Any] = {'use_composition_loss': getattr(config.model, 'use_composition_loss', False),
                                    'composition_lambda': getattr(config.model, 'composition_lambda', 0.0),
-                                   'training_ops': config.data.ops}
+                                   'training_ops': config.data.ops,
+                                   'composition_ops': getattr(config.model, 'composition_ops', []),
+                                   'composition_detach_teacher': getattr(config.model, 'composition_detach_teacher', True)}
 
     model = IJepaModel(
         ops=model_ops,
@@ -157,6 +160,8 @@ def main():
         predictor_hidden_dim=tuple(config.model.predictor_hidden_dim),
         predictor_dropout=config.model.predictor_dropout,
         predictor_normalize=config.model.predictor_normalize,
+        predictor_type=config.model.predictor_type,
+        residual_scale_init=config.model.residual_scale_init,
         joint_cls_training=config.optim.cls_weight > 0,
         momentum =config.model.momentum,
         **kwargs_model
@@ -241,7 +246,8 @@ def main():
     # ----- train ----- #
     epochs = config.run.epochs
     history: list[dict[str, Any]] = []
-    best_test_acc = 0.0  # why -1.0
+    best_metric = 0.0
+    best_metric_name = "test_acc"
     check_point = None
     for epoch in range(1, epochs + 1):
         model.train()
@@ -312,8 +318,17 @@ def main():
 
         # Compute rollout accuracy for unseen operations
         rollout_stats = None
+        direct_knn_stats = None
         if test_ops != config.data.ops:
             rollout_stats = rollout_evaluation(model, test_loader, device, test_ops, config.model.num_classes)
+            prototype_loader = seen_test_loader if seen_test_loader is not None else train_loader
+            direct_knn_stats = direct_knn_evaluation(
+                model,
+                prototype_loader,
+                test_loader,
+                device,
+                config.model.num_classes,
+            )
 
         log_lines = [
             f"[epoch {epoch:3d}]",
@@ -351,6 +366,11 @@ def main():
                     if rollout_stats is not None
                     else ""
                 )
+                + (
+                    f" direct_knn={direct_knn_stats['knn_accuracy']:.4f}"
+                    if direct_knn_stats is not None
+                    else ""
+                )
             )
         )
         print("\n".join(log_lines))
@@ -360,15 +380,22 @@ def main():
             epoch_record["test_seen_ops"] = seen_stats
         if rollout_stats is not None:
             epoch_record["rollout"] = rollout_stats
+        if direct_knn_stats is not None:
+            epoch_record["direct_knn"] = direct_knn_stats
         history.append(epoch_record)
         (run_dir / "history.json").write_text(json.dumps(history, indent=2))
 
-        if test_stats["accuracy"] > best_test_acc:
-            best_test_acc = test_stats["accuracy"]
+        metric_name = "test_acc"
+        metric_value = test_stats["accuracy"]
+        if metric_value > best_metric:
+            best_metric = metric_value
+            best_metric_name = metric_name
             check_point ={
                     "model": model.state_dict(),
                     "epoch": epoch,
-                    "test_acc": best_test_acc,
+                    "test_acc": test_stats["accuracy"],
+                    "selection_metric": best_metric_name,
+                    "selection_metric_value": best_metric,
                     "config": config_blob,
                 }
     if check_point is None:
@@ -376,6 +403,8 @@ def main():
                     "model": model.state_dict(),
                     "epoch": epoch,
                     "test_acc": test_stats["accuracy"],
+                    "selection_metric": best_metric_name,
+                    "selection_metric_value": test_stats["accuracy"],
                     "config": config_blob,
                 }
     torch.save(check_point, run_dir / "checkpoint.pt")
@@ -384,7 +413,7 @@ def main():
         if test_ops != config.data.ops
         else ""
     )
-    print(f"[done] best test acc={best_test_acc:.4f}{ops_note}  artifacts in {run_dir}")
+    print(f"[done] best {best_metric_name}={best_metric:.4f}{ops_note}  artifacts in {run_dir}")
 
     # Check the latent representations at the end of training
     outputs = collect_latent_diagnostics(model, train_loader, device, config.model.num_classes)
@@ -407,14 +436,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
 
 
 
