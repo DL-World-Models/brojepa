@@ -4,29 +4,161 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 from collections.abc import Sequence
+import math
 
 class JepaPredictor(nn.Module):
     '''
     A MLP model turning the context latent from Context encoder and action embedding from operation embedding into
     the latent vector of the predicted image class.
     '''
-    def __init__(self, latent_dim=64, op_embed_dim=32, hidden_dim=(256, 256), dropout=0.1, normalize=True):
+    def __init__(
+            self,
+            latent_dim=64,
+            op_embed_dim=32,
+            hidden_dim=(256, 256),
+            dropout=0.1,
+            normalize=True,
+            predictor_type: str = "mlp",
+            residual_scale_init: float = 0.1,
+            rotation_angle_init: float = 2.0 * math.pi / 10.0,
+            rotation_learnable: bool = True,
+            rotation_init_mode: str = "constant",
+            rotation_period: float = 10.0,
+        ):
         super().__init__()
         self.normalize = normalize
+        self.predictor_type = predictor_type
+        valid_predictor_types = {
+            "mlp",
+            "residual",
+            "scaled_residual",
+            "linear_magnitude",
+            "block_rotation",
+        }
+        if predictor_type not in valid_predictor_types:
+            raise ValueError(f"predictor_type must be one of {sorted(valid_predictor_types)}, got {predictor_type}")
+        self.residual_scale = nn.Parameter(torch.tensor(float(residual_scale_init)))
+        self.num_rotation_pairs = latent_dim // 2
+        if predictor_type == "block_rotation":
+            # breakpoint()    
+            if rotation_init_mode == "constant":
+                init_angles = torch.full((self.num_rotation_pairs,), float(rotation_angle_init))
+            elif rotation_init_mode == "cyclic_harmonics":
+                max_freq = max(1, int(float(rotation_period) // 2))
+                freqs = torch.arange(self.num_rotation_pairs, dtype=torch.float32) % max_freq
+                freqs = freqs + 1.0
+                init_angles = 2.0 * math.pi * freqs / float(rotation_period)
+            else:
+                raise ValueError(
+                    "rotation_init_mode must be 'constant' or 'cyclic_harmonics', "
+                    f"got {rotation_init_mode}"
+                )
+            if rotation_learnable:
+                init_angles = init_angles + 0.01 * torch.randn_like(init_angles)
+                self.rotation_angles = nn.Parameter(init_angles)
+            else:
+                self.register_buffer("rotation_angles", init_angles)
+        else:
+            self.rotation_angles = None
+        output_dim = latent_dim * 2 if predictor_type == "linear_magnitude" else latent_dim
 
-        self.net = nn.Sequential(
-            nn.Linear(op_embed_dim + latent_dim, hidden_dim[0]),
-            nn.ReLU(),
-            nn.Linear(hidden_dim[0], hidden_dim[1]),
-            nn.Dropout(dropout),
-            nn.ReLU(),
-            nn.Linear(hidden_dim[1], latent_dim)
+        if predictor_type == "block_rotation":
+            self.net = None
+        else:
+            self.net = nn.Sequential(
+                nn.Linear(op_embed_dim + latent_dim, hidden_dim[0]),
+                nn.ReLU(),
+                nn.Linear(hidden_dim[0], hidden_dim[1]),
+                nn.Dropout(dropout),
+                nn.ReLU(),
+                nn.Linear(hidden_dim[1], output_dim)
+            )
+
+    def _predict_block_rotation(self, contex_latent, action_values=None):
+        if self.rotation_angles is None:
+            raise RuntimeError("rotation_angles are only available for block_rotation predictor")
+
+        if action_values is None:
+            action_values = torch.ones(
+                contex_latent.shape[0],
+                dtype=contex_latent.dtype,
+                device=contex_latent.device,
+            )
+        action_values = action_values.view(-1).float().unsqueeze(-1)
+        angles = action_values * self.rotation_angles.unsqueeze(0)
+        cos = torch.cos(angles)
+        sin = torch.sin(angles)
+
+        paired = contex_latent[..., : 2 * self.num_rotation_pairs].view(
+            contex_latent.shape[0],
+            self.num_rotation_pairs,
+            2,
         )
+        x = paired[..., 0]
+        y = paired[..., 1]
+        rotated = torch.stack(
+            [
+                cos * x - sin * y,
+                sin * x + cos * y,
+            ],
+            dim=-1,
+        ).flatten(start_dim=1)
 
-    def forward(self, contex_latent, actions_embedded):
+        if contex_latent.shape[-1] % 2 == 1:
+            rotated = torch.cat([rotated, contex_latent[..., -1:]], dim=-1)
+        return F.normalize(rotated, dim=-1) if self.normalize else rotated
+
+    def _predict_one_step(self, contex_latent, actions_embedded):
+        if self.predictor_type == "block_rotation":
+            return self._predict_block_rotation(contex_latent)
         z = torch.cat([contex_latent, actions_embedded], dim=-1)
         z = self.net(z)
+        if self.predictor_type == "linear_magnitude":
+            intercept, slope = z.chunk(2, dim=-1)
+            z = intercept + slope
+        if self.predictor_type == "residual":
+            z = contex_latent + self.residual_scale * z
         return F.normalize(z, dim=-1) if self.normalize else z
+
+    def forward(self, contex_latent, actions_embedded, action_values=None, op_embed=None):
+        if self.predictor_type == "block_rotation":
+            return self._predict_block_rotation(contex_latent, action_values=action_values)
+
+        if self.predictor_type == "linear_magnitude":
+            magnitude = torch.ones(
+                contex_latent.shape[0],
+                1,
+                dtype=contex_latent.dtype,
+                device=contex_latent.device,
+            )
+            if action_values is not None:
+                action_values = action_values.view(-1)
+                magnitude = action_values.abs().float().unsqueeze(-1)
+                if op_embed is not None:
+                    unit_actions = torch.where(
+                        action_values < 0,
+                        torch.full_like(action_values, -1),
+                        torch.ones_like(action_values),
+                    )
+                    actions_embedded = op_embed(unit_actions)
+            coeffs = self.net(torch.cat([contex_latent, actions_embedded], dim=-1))
+            intercept, slope = coeffs.chunk(2, dim=-1)
+            z = intercept + magnitude * slope
+            return F.normalize(z, dim=-1) if self.normalize else z
+
+        if self.predictor_type == "scaled_residual" and action_values is not None and op_embed is not None:
+            action_values = action_values.view(-1)
+            unit_actions = torch.where(
+                action_values < 0,
+                torch.full_like(action_values, -1),
+                torch.ones_like(action_values),
+            )
+            unit_actions_embedded = op_embed(unit_actions)
+            delta = self.net(torch.cat([contex_latent, unit_actions_embedded], dim=-1))
+            scale = action_values.abs().float().unsqueeze(-1)
+            z = contex_latent + scale * self.residual_scale * delta
+            return F.normalize(z, dim=-1) if self.normalize else z
+        return self._predict_one_step(contex_latent, actions_embedded)
 
 class ClassHead(nn.Module):
     '''
@@ -58,6 +190,12 @@ class IJepaModel(nn.Module):
             predictor_hidden_dim: tuple[int, int] = (256, 256),
             predictor_dropout: float = 0.2,
             predictor_normalize: bool = True,
+            predictor_type: str = "mlp",
+            residual_scale_init: float = 0.1,
+            rotation_angle_init: float = 2.0 * math.pi / 10.0,
+            rotation_learnable: bool = True,
+            rotation_init_mode: str = "constant",
+            rotation_period: float = 10.0,
             joint_cls_training: bool = True,
             momentum: float = 0.99,
             **kwargs: dict[str, dict] #
@@ -79,7 +217,13 @@ class IJepaModel(nn.Module):
 
         self.jepa_predictor = JepaPredictor(latent_dim=latent_dim, op_embed_dim=op_embed_dim,
                                             hidden_dim=predictor_hidden_dim, dropout=predictor_dropout,
-                                            normalize=predictor_normalize)
+                                            normalize=predictor_normalize,
+                                            predictor_type=predictor_type,
+                                            residual_scale_init=residual_scale_init,
+                                            rotation_angle_init=rotation_angle_init,
+                                            rotation_learnable=rotation_learnable,
+                                            rotation_init_mode=rotation_init_mode,
+                                            rotation_period=rotation_period)
         classifier_kwargs = kwargs.get('classifier_kwargs', {})
         self.class_head = ClassHead(latent_dim=latent_dim, **classifier_kwargs)
         self._init_target_encoder()
@@ -103,7 +247,12 @@ class IJepaModel(nn.Module):
         with torch.no_grad():
             target_latent = self.target_encoder(target_images)
         actions_embedded = self.op_embed(actions)
-        predicted_latent = self.jepa_predictor(context_latent, actions_embedded)
+        predicted_latent = self.jepa_predictor(
+            context_latent,
+            actions_embedded,
+            action_values=actions,
+            op_embed=self.op_embed,
+        )
         if self.joint_cls_training:
             class_logits = self.class_head(predicted_latent)
         else:  # probe-only mode: keep classification gradients out of JEPA latents
@@ -128,7 +277,7 @@ def compute_covariance_reg(latent: torch.Tensor) -> torch.Tensor:
 def compute_loss(predicted_latent, target_latent, target_labels=None, class_logits=None, cls_loss_weight=0.0,
                  use_vic_reg=True, lamda=25, miu=25, nu=1.0, gamma=1.0,
                  use_composition_loss=False, composition_lambda=0.0, model=None, context_latent=None, 
-                 training_ops=None, device=None):
+                 training_ops=None, composition_ops=None, composition_detach_teacher=True, device=None):
     """Compute JEPA training loss with optional VICReg regularization and composition consistency loss.
     
     Loss computation pipeline:
@@ -215,6 +364,8 @@ def compute_loss(predicted_latent, target_latent, target_labels=None, class_logi
             model=model,
             context_latent=context_latent,
             training_ops=training_ops,
+            composition_ops=composition_ops,
+            detach_teacher=composition_detach_teacher,
             device=device if device is not None else context_latent.device
         )
         jepa_loss = jepa_loss + composition_lambda * comp_loss
@@ -231,6 +382,8 @@ def compute_composition_loss(
     model,
     context_latent: torch.Tensor,
     training_ops: list[int],
+    composition_ops: list[int] | None,
+    detach_teacher: bool,
     device: torch.device,
 ) -> torch.Tensor:
     """Compute composition consistency loss.
@@ -256,7 +409,8 @@ def compute_composition_loss(
     num_comparisons = 0
     batch_size = context_latent.shape[0]  # Get batch size from context_latent
     
-    for op in training_ops:
+    ops_to_compare = composition_ops if composition_ops else training_ops
+    for op in ops_to_compare:
         if op in base_ops:
             continue  # Skip base operations themselves
         
@@ -269,23 +423,34 @@ def compute_composition_loss(
             k = abs(op) // abs(neg_base)
         
         # Get base op embedding and expand to batch size
-        base_op_tensor = torch.tensor([base_op], dtype=torch.float32, device=device)
-        base_op_emb = model.op_embed(base_op_tensor)  # [1, op_embed_dim]
-        base_op_emb = base_op_emb.expand(batch_size, -1)  # [B, op_embed_dim]
+        base_op_tensor = torch.full((batch_size,), base_op, dtype=torch.float32, device=device)
+        base_op_emb = model.op_embed(base_op_tensor)  # [B, op_embed_dim]
         
         # Sequential application: z1 = g(z, base), z2 = g(z1, base), ..., zk = g(z_{k-1}, base)
         z_seq = context_latent
         for _ in range(k):
-            z_seq = model.jepa_predictor(z_seq, base_op_emb)
+            z_seq = model.jepa_predictor(
+                z_seq,
+                base_op_emb,
+                action_values=base_op_tensor,
+                op_embed=model.op_embed,
+            )
+        if detach_teacher:
+            z_seq = z_seq.detach()
         
         # Direct application: z_direct_k = g(z, k*base)
-        op_tensor = torch.tensor([op], dtype=torch.float32, device=device)
-        op_emb = model.op_embed(op_tensor)  # [1, op_embed_dim]
-        op_emb = op_emb.expand(batch_size, -1)  # [B, op_embed_dim]
-        z_direct = model.jepa_predictor(context_latent, op_emb)
+        op_tensor = torch.full((batch_size,), op, dtype=torch.float32, device=device)
+        op_emb = model.op_embed(op_tensor)  # [B, op_embed_dim]
+        z_direct = model.jepa_predictor(
+            context_latent,
+            op_emb,
+            action_values=op_tensor,
+            op_embed=model.op_embed,
+        )
         
-        # MSE loss between sequential and direct
-        loss = F.mse_loss(z_seq, z_direct, reduction='mean')
+        # Squared latent distance per sample. Using a per-vector distance keeps
+        # composition consistency from being diluted by latent dimensionality.
+        loss = (z_seq - z_direct).pow(2).sum(dim=-1).mean()
         if total_comp_loss is None:
             total_comp_loss = loss
         else:
@@ -299,7 +464,3 @@ def compute_composition_loss(
     total_comp_loss = total_comp_loss / num_comparisons
     
     return total_comp_loss
-
-
-
-
