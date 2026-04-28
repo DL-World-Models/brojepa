@@ -10,8 +10,54 @@ from models import (
     OperationEmbeddingHybrid,
     OperationEmbeddingLinear,
     OperationEmbeddingLookup,
+    OperationEmbeddingAdditive,
     create_operation_embedding,
 )
+
+
+class TestOperationEmbeddingAdditive:
+    """Tests for the new additive embedding class."""
+
+    def test_initialization(self) -> None:
+        op_embed_dim = 16
+        from models.op_embedding import OperationEmbeddingAdditive
+
+        embed = OperationEmbeddingAdditive(op_embed_dim)
+        assert isinstance(embed, OperationEmbedding)
+        assert embed.op_embed_dim == op_embed_dim
+
+    def test_forward_pass_single_and_sign(self) -> None:
+        op_embed_dim = 16
+        from models.op_embedding import OperationEmbeddingAdditive
+
+        embed = OperationEmbeddingAdditive(op_embed_dim)
+        embed.eval()
+
+        pos = torch.tensor([2.0])
+        neg = torch.tensor([-2.0])
+        with torch.no_grad():
+            out_pos = embed(pos)
+            out_neg = embed(neg)
+
+        assert out_pos.shape == (1, op_embed_dim)
+        assert out_neg.shape == (1, op_embed_dim)
+        # Same magnitude but different sign should differ
+        assert not torch.allclose(out_pos, out_neg)
+
+    def test_scaling_behavior(self) -> None:
+        op_embed_dim = 8
+        from models.op_embedding import OperationEmbeddingAdditive
+
+        embed = OperationEmbeddingAdditive(op_embed_dim)
+        embed.eval()
+
+        with torch.no_grad():
+            out1 = embed(torch.tensor([1.0]))
+            out2 = embed(torch.tensor([2.0]))
+
+        # out2 should be roughly double out1 in magnitude since scaling by k
+        ratio = out2.abs().mean() / (out1.abs().mean() + 1e-12)
+        assert ratio.item() > 1.5
 
 
 class TestOperationEmbeddingLookup:
@@ -509,7 +555,15 @@ class TestCreateOperationEmbedding:
         ops = [1, 2, -1, -2]
         op_vals = torch.tensor([1.0, 2.0])
 
-        for embedding_type in ["embedding", "linear", "fourier", "hybrid"]:
+        for embedding_type in [
+            "embedding",
+            "linear",
+            "fourier",
+            "hybrid",
+            "additive",
+            "additive_embedding",
+            "additive_embedding_normalized",
+        ]:
             ops_param = ops if embedding_type == "embedding" else None
             embed = create_operation_embedding(embedding_type, 32, ops_param)
             embed.eval()
@@ -519,3 +573,18 @@ class TestCreateOperationEmbedding:
                 out2 = embed(op_vals)
 
             torch.testing.assert_close(out1, out2)
+
+    def test_create_additive_types(self) -> None:
+        """Test factory creates additive variants and respects max_mag."""
+        # default 'additive' and 'additive_embedding' are un-normalized (max_mag=1.0)
+        embed_a = create_operation_embedding("additive", 16)
+        assert isinstance(embed_a, OperationEmbeddingAdditive)
+        assert getattr(embed_a, "max_mag", None) == 1.0
+
+        embed_b = create_operation_embedding("additive_embedding", 16)
+        assert isinstance(embed_b, OperationEmbeddingAdditive)
+        assert getattr(embed_b, "max_mag", None) == 1.0
+
+        embed_norm = create_operation_embedding("additive_embedding_normalized", 16)
+        assert isinstance(embed_norm, OperationEmbeddingAdditive)
+        assert getattr(embed_norm, "max_mag", None) == 9.0

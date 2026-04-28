@@ -102,7 +102,7 @@ def evaluate(
     """Evaluate model on a dataset with standard metrics."""
     model.eval()
     total_loss = 0.0
-    jepa_loss, cls_loss = 0.0, 0.0
+    jepa_loss, cls_loss, comp_loss = 0.0, 0.0, 0.0
     accuracy = 0.0
     num_batches = len(loader)
     with torch.no_grad():
@@ -111,24 +111,41 @@ def evaluate(
             target_img = batch["tgt_img"].to(device, non_blocking=True)
             target_labels = batch["tgt_label"].to(device, non_blocking=True)
             actions = batch["op"].to(device, non_blocking=True)
+            
             predicted_latent, target_latent, class_logits = model(context_img, target_img, actions)
+            
+            # Extract context_latent only if composition loss is enabled
+            context_latent = None
+            use_comp = kwargs.get('use_composition_loss', False) and kwargs.get('composition_lambda', 0.0) > 0.0
+            if use_comp:
+                context_latent = model.context_encoder(context_img)
+            
+            # Merge composition kwargs with model and context info for this batch
+            batch_kwargs = {**kwargs, 'model': model, 'context_latent': context_latent, 'device': device}
             losses = compute_loss(predicted_latent, target_latent,
                                   target_labels=target_labels,
                                   class_logits=class_logits,
-                                  **kwargs
+                                  **batch_kwargs
                                   )
 
             total_loss += losses["total_loss"].item()
             jepa_loss += losses["jepa_loss"].item()
             accuracy += losses["accuracy"].item()
             cls_loss += losses["cls_loss"].item()
+            if 'comp_loss' in losses:
+                comp_loss += losses['comp_loss']
 
-    return {
+    result = {
         "total_loss": total_loss / num_batches,
         "jepa_loss": jepa_loss / num_batches,
         "accuracy": accuracy / num_batches,
         "cls_loss": cls_loss / num_batches
     }
+    # Add composition loss if enabled
+    if kwargs.get('use_composition_loss', False) and kwargs.get('composition_lambda', 0.0) > 0.0:
+        result['comp_loss'] = comp_loss / num_batches
+    
+    return result
 
 
 @torch.no_grad()

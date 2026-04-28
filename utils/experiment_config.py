@@ -54,6 +54,10 @@ class ModelConfig:
     nu: float = 1.0    # weight for covariance reg
     gamma: float = 1.0 # hinge loss threshold for variance reg
 
+    # Composition loss parameters
+    use_composition_loss: bool = False
+    composition_lambda: float = 0.0
+
 
 @dataclass(slots=True)
 class OptimConfig:
@@ -129,6 +133,8 @@ class ExperimentConfig:
             miu=float(model_raw.get("miu", 25)),
             nu=float(model_raw.get("nu", 1.0)),
             gamma=float(model_raw.get("gamma", 1.0)),
+            use_composition_loss=bool(model_raw.get("use_composition_loss", False)),
+            composition_lambda=float(model_raw.get("composition_lambda", 0.0)),
         )
         optim = OptimConfig(
             lr=float(optim_raw.get("lr", 1e-3)),

@@ -1,0 +1,76 @@
+data:
+  dataset: MNIST
+  # Training operations: base operations (+1, -1) and their compositions (+2, +3, -2, -3)
+  # The model learns that +2 = f(f(+1)) and +3 = f(f(f(+1))), etc.
+  ops: [1, -1]
+  # Unseen operations for generalization testing
+  test_ops: [3]
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  # Dimension of operation embeddings
+  op_embed_dim: 32
+  # Use additive operator embedding for smooth linear scaling with operation magnitude
+  # This embedding is crucial for composition loss to work effectively:
+  # e(k*v) should be approximately k * e(v)
+  op_embedding_type: "linear"
+
+  # Encoder selection: 'mlp', 'cnn', or 'vit'
+  encoder_type: 'mlp'
+  # Latent dimension for context and target encodings
+  latent_dim: 32
+
+  # MLP / CNN encoder options
+  encoder_normalize: True
+  activation: 'relu'
+  encoder_hidden_dim: 256
+
+  # JEPA predictor settings
+  predictor_dropout: 0.2
+  predictor_hidden_dim: [256, 256]
+  # Normalize predictor output to unit sphere for stable learning
+  predictor_normalize: True
+
+  # Classification head (auxiliary supervision)
+  classifier_hidden_dim: 64
+  num_classes: 10
+
+  # EMA update rate for target encoder
+  momentum: 0.99
+
+  # VICReg-style regularizer settings (disabled for compositionality focus)
+  use_vic_reg: False
+  lamda: 25
+  miu: 25
+  nu: 1.0
+  gamma: 1.0
+
+  # === Composition Loss Settings ===
+  # Enable composition consistency loss to enforce:
+  # g(z, k*base) ≈ g(g(...g(z, base)..., base), base)  [k times]
+  # This encourages the predictor to learn compositional structure
+  use_composition_loss: False
+  # Weight for composition loss in total loss: L_total = L_main + lambda * L_comp
+  # Default ~0.1-1.0; start conservative and increase if compositionality is not emerging
+  composition_lambda: 1
+
+optim:
+  lr: 1e-4
+  weight_decay: 0
+  # Weight for classification supervision (0 disables gradient contribution to predictor)
+  cls_weight: 0
+
+run:
+  # Classification warmup before JEPA phase (disabled for compositionality experiments)
+  warmup_epochs: 0
+  warmup_lr: 1e-4
+  freeze_context_post_warmup: False
+  # Number of training epochs
+  epochs: 25
+  seed: 42
+  # Directory and tag for saving run artifacts
+  runs_dir: runs/jepa
+  tag: compositionality_test
+

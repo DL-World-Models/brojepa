@@ -11,7 +11,15 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-OpEmbeddingType = Literal["embedding", "linear", "fourier", "hybrid"]
+OpEmbeddingType = Literal[
+    "embedding",
+    "linear",
+    "fourier",
+    "hybrid",
+    "additive",
+    "additive_embedding",
+    "additive_embedding_normalized",
+]
 
 
 class OperationEmbedding(nn.Module):
@@ -164,6 +172,36 @@ class OperationEmbeddingHybrid(OperationEmbedding):
         return self.proj(hybrid_vec)  # [B, op_embed_dim]
 
 
+class OperationEmbeddingAdditive(OperationEmbedding):
+    """Additive operator embedding with separate base vectors for positive and negative.
+
+    op_embed(k) = (k / max_mag) * base_plus
+    op_embed(-k) = (k / max_mag) * base_minus
+
+    By default `max_mag=9.0` (MNIST digits 0-9). Normalizing keeps embedding
+    magnitudes in a consistent range and stabilizes training.
+    """
+
+    def __init__(self, op_embed_dim: int, max_mag: float = 9.0) -> None:
+        super().__init__(op_embed_dim)
+
+        # Learnable base vectors for positive and negative operands
+        self.base_plus = nn.Parameter(torch.randn(op_embed_dim) * 0.01)
+        self.base_minus = nn.Parameter(torch.randn(op_embed_dim) * 0.01)
+        self.max_mag = float(max_mag) if max_mag != 0.0 else 1.0
+
+    def forward(self, op_vals: torch.Tensor) -> torch.Tensor:
+        # op_vals: [B]
+        vals = op_vals.unsqueeze(-1).float()  # [B, 1]
+        mags = torch.abs(vals) / float(self.max_mag)  # normalized magnitude [B, 1]
+        signs = (vals >= 0).float()  # [B, 1], 1 for non-negative, 0 for negative
+
+        # Broadcast base vectors to [B, op_embed_dim]
+        base = signs * self.base_plus + (1.0 - signs) * self.base_minus  # [B, op_embed_dim]
+
+        return mags * base  # [B, op_embed_dim]
+
+
 def create_operation_embedding(
     embedding_type: OpEmbeddingType,
     op_embed_dim: int,
@@ -192,8 +230,14 @@ def create_operation_embedding(
         return OperationEmbeddingFourier(op_embed_dim)
     elif embedding_type == "hybrid":
         return OperationEmbeddingHybrid(op_embed_dim)
+    elif embedding_type in ("additive", "additive_embedding"):
+        # Backwards-compatible non-normalized additive (scale by raw k)
+        return OperationEmbeddingAdditive(op_embed_dim, max_mag=1.0)
+    elif embedding_type == "additive_embedding_normalized":
+        # Normalized for MNIST digits 0-9
+        return OperationEmbeddingAdditive(op_embed_dim, max_mag=9.0)
     else:
         raise ValueError(
-            f"embedding_type must be 'embedding', 'linear', 'fourier', or 'hybrid', "
-            f"got {embedding_type}"
+            f"embedding_type must be one of 'embedding', 'linear', 'fourier', 'hybrid', "
+            f"'additive', 'additive_embedding', or 'additive_embedding_normalized', got {embedding_type}"
         )

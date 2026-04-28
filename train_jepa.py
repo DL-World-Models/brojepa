@@ -142,7 +142,11 @@ def main():
                                     'lamda': config.model.lamda,
                                     'gamma': config.model.gamma,
                                     'miu': config.model.miu,
-                                    'nu': config.model.nu,}
+                                    'nu': config.model.nu}
+
+    kwargs_comp: dict[str, Any] = {'use_composition_loss': getattr(config.model, 'use_composition_loss', False),
+                                   'composition_lambda': getattr(config.model, 'composition_lambda', 0.0),
+                                   'training_ops': config.data.ops}
 
     model = IJepaModel(
         ops=model_ops,
@@ -242,7 +246,7 @@ def main():
     for epoch in range(1, epochs + 1):
         model.train()
         total_loss = 0
-        jepa_loss, cls_loss = 0.0, 0.0
+        jepa_loss, cls_loss, comp_loss = 0.0, 0.0, 0.0
         accuracy = 0
         pbar: Any = tqdm(train_loader, desc=f'training epoch {epoch}', leave=False)
         for batch in pbar:
@@ -250,11 +254,21 @@ def main():
             target_img = batch["tgt_img"].to(device, non_blocking=True)
             target_labels = batch["tgt_label"].to(device, non_blocking=True)
             actions = batch["op"].to(device, non_blocking=True)
+            
             predicted_latent, target_latent, class_logits = model(context_img, target_img, actions)
+            
+            # Extract context_latent only if composition loss is enabled
+            context_latent = None
+            if kwargs_comp['use_composition_loss'] and kwargs_comp['composition_lambda'] > 0.0:
+                context_latent = model.context_encoder(context_img)
+            
+            # Merge composition kwargs with model and context info for this batch
+            batch_kwargs_comp = {**kwargs_comp, 'model': model, 'context_latent': context_latent, 'device': device}
             losses = compute_loss(predicted_latent, target_latent,
                                   target_labels=target_labels,
                                   class_logits=class_logits,
-                                  **kwargs_vicreg
+                                  **kwargs_vicreg,
+                                  **batch_kwargs_comp
                                   )
 
             optimizer.zero_grad(set_to_none=True)
@@ -275,6 +289,8 @@ def main():
             jepa_loss += losses['jepa_loss'].item()
             cls_loss += losses['cls_loss'].item()
             accuracy += losses['accuracy'].item()
+            if 'comp_loss' in losses:
+                comp_loss += losses['comp_loss']
 
         train_stats = {
             'total_loss': total_loss / num_batches,
@@ -282,10 +298,17 @@ def main():
             'cls_loss': cls_loss / num_batches,
             'accuracy': accuracy / num_batches
         }
-        test_stats = evaluate(model, test_loader, device, **kwargs_vicreg)
+        # Add composition loss if it was computed
+        if kwargs_comp['use_composition_loss'] and kwargs_comp['composition_lambda'] > 0.0:
+            if comp_loss > 0.0:
+                train_stats['comp_loss'] = comp_loss / num_batches
+            else:
+                # comp_loss might not have been accumulated, set to 0 for display
+                train_stats['comp_loss'] = 0.0
+        test_stats = evaluate(model, test_loader, device, **kwargs_vicreg, **kwargs_comp)
         seen_stats = None
         if seen_test_loader is not None:
-            seen_stats = evaluate(model, seen_test_loader, device, **kwargs_vicreg)
+            seen_stats = evaluate(model, seen_test_loader, device, **kwargs_vicreg, **kwargs_comp)
 
         # Compute rollout accuracy for unseen operations
         rollout_stats = None
@@ -300,6 +323,7 @@ def main():
                 f"jepa={train_stats['jepa_loss']:.4f} "
                 f"cls={train_stats['cls_loss']:.4f} "
                 f"acc={train_stats['accuracy']:.4f}"
+                + (f" comp={train_stats['comp_loss']:.4f}" if 'comp_loss' in train_stats else "")
             ),
         ]
         if seen_stats is not None:
@@ -310,6 +334,7 @@ def main():
                     f"jepa={seen_stats['jepa_loss']:.4f} "
                     f"cls={seen_stats['cls_loss']:.4f} "
                     f"acc={seen_stats['accuracy']:.4f}"
+                    + (f" comp={seen_stats['comp_loss']:.4f}" if 'comp_loss' in seen_stats else "")
                 )
             )
         log_lines.append(
@@ -319,6 +344,7 @@ def main():
                 f"jepa={test_stats['jepa_loss']:.4f} "
                 f"cls={test_stats['cls_loss']:.4f} "
                 f"acc={test_stats['accuracy']:.4f}"
+                + (f" comp={test_stats['comp_loss']:.4f}" if 'comp_loss' in test_stats else "")
                 + (
                     f" rollout_cls={rollout_stats['cls_accuracy']:.4f} "
                     f"rollout_knn={rollout_stats['knn_accuracy']:.4f}"
