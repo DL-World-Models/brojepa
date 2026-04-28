@@ -162,6 +162,10 @@ def main():
         predictor_normalize=config.model.predictor_normalize,
         predictor_type=config.model.predictor_type,
         residual_scale_init=config.model.residual_scale_init,
+        rotation_angle_init=config.model.rotation_angle_init,
+        rotation_learnable=config.model.rotation_learnable,
+        rotation_init_mode=config.model.rotation_init_mode,
+        rotation_period=config.model.rotation_period,
         joint_cls_training=config.optim.cls_weight > 0,
         momentum =config.model.momentum,
         **kwargs_model
@@ -436,8 +440,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
 
 

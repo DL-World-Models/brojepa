@@ -16,6 +16,10 @@ def parse_str_list(raw: str) -> list[str]:
     return [item for item in raw.split(",") if item]
 
 
+def parse_int_list(raw: str) -> list[int]:
+    return [int(item) for item in raw.split(",") if item]
+
+
 def latest_run_dir(runs_dir: Path, tag: str) -> Path:
     matches = sorted(runs_dir.glob(f"*-{tag}_*"), key=lambda path: path.stat().st_mtime)
     if not matches:
@@ -48,6 +52,11 @@ def main() -> None:
     parser.add_argument("--op-embedding-types", default="additive_embedding,additive_embedding_normalized")
     parser.add_argument("--predictor-types", default="mlp,scaled_residual")
     parser.add_argument("--composition-lambdas", default="0,0.1,0.3,1.0")
+    parser.add_argument(
+        "--composition-ops",
+        default="2,-2",
+        help="Comma-separated synthetic composition ops. Keep test ops out for strict zero-shot.",
+    )
     parser.add_argument("--cls-weights", default="0")
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -55,6 +64,7 @@ def main() -> None:
 
     runs_dir = Path(args.runs_dir)
     results: list[dict[str, object]] = []
+    composition_ops = parse_int_list(args.composition_ops)
     grid = itertools.product(
         parse_str_list(args.op_embedding_types),
         parse_str_list(args.predictor_types),
@@ -83,6 +93,8 @@ def main() -> None:
             predictor_type,
             "--composition-lambda",
             str(composition_lambda),
+            "--composition-ops",
+            *[str(op) for op in composition_ops],
             "--cls-weight",
             str(cls_weight),
             "--composition-detach-teacher",
@@ -104,6 +116,7 @@ def main() -> None:
             "op_embedding_type": op_embedding_type,
             "predictor_type": predictor_type,
             "composition_lambda": composition_lambda,
+            "composition_ops": composition_ops,
             "cls_weight": cls_weight,
             **metrics,
         }

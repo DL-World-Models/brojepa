@@ -194,7 +194,12 @@ def rollout_evaluation(
         unit_actions_embedded = model.op_embed(unit_actions)
         context_latent = model.context_encoder(context_img)
         for _ in range(scale):
-            predicted_latent = model.jepa_predictor(context_latent, unit_actions_embedded)
+            predicted_latent = model.jepa_predictor(
+                context_latent,
+                unit_actions_embedded,
+                action_values=unit_actions,
+                op_embed=model.op_embed,
+            )
             context_latent = predicted_latent
         
         # Accuracy calculated using ClassHead
