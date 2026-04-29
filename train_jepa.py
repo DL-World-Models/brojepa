@@ -324,7 +324,8 @@ def main():
         rollout_stats = None
         direct_knn_stats = None
         if test_ops != config.data.ops:
-            rollout_stats = rollout_evaluation(model, test_loader, device, test_ops, config.model.num_classes)
+            rollout_stats = rollout_evaluation(model, test_loader, device, config.data.ops,
+                                               test_ops, config.model.num_classes)
             prototype_loader = seen_test_loader if seen_test_loader is not None else train_loader
             direct_knn_stats = direct_knn_evaluation(
                 model,
@@ -402,16 +403,18 @@ def main():
                     "selection_metric_value": best_metric,
                     "config": config_blob,
                 }
-    if check_point is None:
-        check_point = {
-                    "model": model.state_dict(),
-                    "epoch": epoch,
-                    "test_acc": test_stats["accuracy"],
-                    "selection_metric": best_metric_name,
-                    "selection_metric_value": test_stats["accuracy"],
-                    "config": config_blob,
-                }
-    torch.save(check_point, run_dir / "checkpoint.pt")
+    if check_point is not None:
+        torch.save(check_point, run_dir / "checkpoint_best.pt")
+
+    check_point = {
+                "model": model.state_dict(),
+                "epoch": epoch,
+                "test_acc": test_stats["accuracy"],
+                "selection_metric": best_metric_name,
+                "selection_metric_value": test_stats["accuracy"],
+                "config": config_blob,
+            }
+    torch.save(check_point, run_dir / "checkpoint_final.pt")
     ops_note = (
         f" (unseen ops: {test_ops})"
         if test_ops != config.data.ops
@@ -433,7 +436,8 @@ def main():
 
     # Compute final rollout evaluation for unseen operations
     if test_ops != config.data.ops:
-        rollout_accuracy = rollout_evaluation(model, test_loader, device, test_ops, config.model.num_classes)
+        rollout_accuracy = rollout_evaluation(model, test_loader, device,
+                                              config.data.ops, test_ops, config.model.num_classes)
         print(f"=======Final Rollout test accuracy=============")
         for k, v in rollout_accuracy.items():
             print(f"{k}: {v}")
