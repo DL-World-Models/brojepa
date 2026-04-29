@@ -34,6 +34,7 @@ class JepaPredictor(nn.Module):
             "scaled_residual",
             "linear_magnitude",
             "block_rotation",
+            "simple_rotation",
         }
         if predictor_type not in valid_predictor_types:
             raise ValueError(f"predictor_type must be one of {sorted(valid_predictor_types)}, got {predictor_type}")
@@ -58,11 +59,19 @@ class JepaPredictor(nn.Module):
                 self.rotation_angles = nn.Parameter(init_angles)
             else:
                 self.register_buffer("rotation_angles", init_angles)
+        elif predictor_type == "simple_rotation":
+            # Simple rotation: single learnable angle theta for all pairs
+            init_angle = torch.tensor(float(rotation_angle_init))
+            if rotation_learnable:
+                init_angle = init_angle + 0.01 * torch.randn_like(init_angle)
+                self.rotation_angles = nn.Parameter(init_angle)
+            else:
+                self.register_buffer("rotation_angles", init_angle)
         else:
             self.rotation_angles = None
         output_dim = latent_dim * 2 if predictor_type == "linear_magnitude" else latent_dim
 
-        if predictor_type == "block_rotation":
+        if predictor_type in ("block_rotation", "simple_rotation"):
             self.net = None
         else:
             self.net = nn.Sequential(
@@ -108,6 +117,47 @@ class JepaPredictor(nn.Module):
             rotated = torch.cat([rotated, contex_latent[..., -1:]], dim=-1)
         return F.normalize(rotated, dim=-1) if self.normalize else rotated
 
+    def _predict_simple_rotation(self, contex_latent, action_values=None):
+        """Simple rotation: rotate all pairs by the same learnable angle theta.
+        
+        This is simpler than block_rotation which has per-pair angles. Here we just
+        have one angle theta that scales by action value and rotates all pairs uniformly.
+        """
+        if self.rotation_angles is None:
+            raise RuntimeError("rotation_angles are only available for simple_rotation predictor")
+
+        if action_values is None:
+            action_values = torch.ones(
+                contex_latent.shape[0],
+                dtype=contex_latent.dtype,
+                device=contex_latent.device,
+            )
+        action_values = action_values.view(-1).float()
+        # Single angle scaled by action value
+        angle = action_values * self.rotation_angles
+        cos = torch.cos(angle).unsqueeze(-1)
+        sin = torch.sin(angle).unsqueeze(-1)
+
+        # Apply same rotation to all pairs
+        paired = contex_latent[..., : 2 * self.num_rotation_pairs].view(
+            contex_latent.shape[0],
+            self.num_rotation_pairs,
+            2,
+        )
+        x = paired[..., 0]
+        y = paired[..., 1]
+        rotated = torch.stack(
+            [
+                cos * x - sin * y,
+                sin * x + cos * y,
+            ],
+            dim=-1,
+        ).flatten(start_dim=1)
+
+        if contex_latent.shape[-1] % 2 == 1:
+            rotated = torch.cat([rotated, contex_latent[..., -1:]], dim=-1)
+        return F.normalize(rotated, dim=-1) if self.normalize else rotated
+
     def _predict_one_step(self, contex_latent, actions_embedded):
         if self.predictor_type == "block_rotation":
             return self._predict_block_rotation(contex_latent)
@@ -123,6 +173,9 @@ class JepaPredictor(nn.Module):
     def forward(self, contex_latent, actions_embedded, action_values=None, op_embed=None):
         if self.predictor_type == "block_rotation":
             return self._predict_block_rotation(contex_latent, action_values=action_values)
+
+        if self.predictor_type == "simple_rotation":
+            return self._predict_simple_rotation(contex_latent, action_values=action_values)
 
         if self.predictor_type == "linear_magnitude":
             magnitude = torch.ones(
