@@ -180,8 +180,13 @@ def rollout_evaluation(
     model.eval()
     num_batches = len(loader)
     knn_accuracy = 0.0
-    scale = int(abs(test_ops[0])/abs(ops[0]))
     cls_accuracy = 0.0
+    cls_loss_total = 0.0
+
+    base_magnitudes = [abs(op) for op in ops if op != 0]
+    if not base_magnitudes:
+        raise ValueError(f"rollout_evaluation requires non-zero training ops, got ops={ops}")
+    base_mag = min(base_magnitudes)
 
     # Compute prototypes once for efficiency
     outputs = collect_latent_diagnostics(model, loader, device, num_classes)
@@ -192,23 +197,37 @@ def rollout_evaluation(
         target_labels = batch["tgt_label"].to(device, non_blocking=True)
         actions = batch["op"].to(device, non_blocking=True)
 
-        unit_actions = actions // scale
+        if not torch.all((actions.abs() % base_mag) == 0):
+            bad_actions = actions[(actions.abs() % base_mag) != 0].detach().cpu().tolist()
+            raise ValueError(
+                "rollout_evaluation requires test actions divisible by the smallest "
+                f"training op magnitude ({base_mag}); got examples {bad_actions[:8]}"
+            )
+
+        step_counts = (actions.abs() / base_mag).long()
+        unit_actions = torch.sign(actions) * float(base_mag)
         unit_actions_embedded = model.op_embed(unit_actions)
         context_latent = model.context_encoder(context_img)
-        for _ in range(scale):
-            predicted_latent = model.jepa_predictor(
+
+        max_steps = int(step_counts.max().item()) if step_counts.numel() > 0 else 0
+        predicted_latent = context_latent
+        for step_idx in range(max_steps):
+            next_latent = model.jepa_predictor(
                 context_latent,
                 unit_actions_embedded,
                 action_values=unit_actions,
                 op_embed=model.op_embed,
             )
-            context_latent = predicted_latent
+            active = (step_counts > step_idx).unsqueeze(-1)
+            context_latent = torch.where(active, next_latent, context_latent)
+            predicted_latent = context_latent
         
         # Accuracy calculated using ClassHead
         class_logits = model.class_head(predicted_latent)
         cls_loss = F.cross_entropy(class_logits, target_labels, reduction="mean")
         pred_class = torch.argmax(class_logits, dim=-1)
         cls_accuracy += (pred_class == target_labels).float().mean()
+        cls_loss_total += cls_loss.item()
 
         # Accuracy calculated using 1-nearest neighbor
         dists = torch.cdist(predicted_latent, prototypes)
@@ -220,7 +239,7 @@ def rollout_evaluation(
     return {
         "knn_accuracy": float(knn_accuracy),
         "cls_accuracy": float(cls_accuracy),
-        "cls_loss": float(cls_loss),
+        "cls_loss": cls_loss_total / num_batches,
     }
 
 
