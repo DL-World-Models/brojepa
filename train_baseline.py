@@ -77,6 +77,51 @@ def _run_epoch(
     return {"loss": total_loss / max(n, 1), "acc": acc_metric.compute().item()}
 
 
+def _evaluate_by_op(
+    model: nn.Module,
+    ops: list[int],
+    config: Any,
+    criterion: nn.Module,
+    device: torch.device,
+) -> list[dict[str, float | int]]:
+    model.eval()
+    rows: list[dict[str, float | int]] = []
+    for op_val in ops:
+        loader = get_arithmetic_dataloader(
+            dataset_name=config.data.dataset,
+            batch_size=config.data.batch_size,
+            ops=[op_val],
+            is_train=False,
+            data_root=config.data.data_root,
+            num_workers=config.data.num_workers,
+        )
+        correct, total, total_loss = 0, 0, 0.0
+        acc_metric = MulticlassAccuracy(num_classes=config.model.num_classes).to(device)
+        acc_metric.reset()
+        with torch.no_grad():
+            for batch in loader:
+                img = batch["ctx_img"].to(device, non_blocking=True)
+                op = batch["op"].to(device, non_blocking=True)
+                tgt = batch["tgt_label"].to(device, non_blocking=True)
+                logits = model(img, op)
+                loss = criterion(logits, tgt)
+                bs = tgt.size(0)
+                total_loss += loss.item() * bs
+                total += bs
+                correct += (logits.argmax(dim=1) == tgt).sum().item()
+                acc_metric.update(logits, tgt)
+        rows.append(
+            {
+                "op": int(op_val),
+                "micro_acc": correct / max(total, 1),
+                "macro_acc": acc_metric.compute().item(),
+                "loss": total_loss / max(total, 1),
+                "n": total,
+            }
+        )
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -152,6 +197,14 @@ def main() -> None:
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
             op_embedding_type=config.model.op_embedding_type,
+            predictor_type=config.model.predictor_type,
+            predictor_normalize=config.model.predictor_normalize,
+            rotation_angle_init=config.model.rotation_angle_init,
+            rotation_learnable=config.model.rotation_learnable,
+            rotation_init_mode=config.model.rotation_init_mode,
+            rotation_period=config.model.rotation_period,
+            use_action_rotation=config.model.use_action_rotation,
+            include_op_embedding_in_head=config.model.include_op_embedding_in_head,
         ).to(device)
     elif config.model.name == "simple_fc2":
         model = SimpleFCLateFusion(
@@ -159,7 +212,16 @@ def main() -> None:
             num_classes=config.model.num_classes,
             op_embed_dim=config.model.op_embed_dim,
             mlp_hidden=config.model.mlp_hidden,
+            simple_encoder_depth=config.model.simple_encoder_depth,
             op_embedding_type=config.model.op_embedding_type,
+            predictor_type=config.model.predictor_type,
+            predictor_normalize=config.model.predictor_normalize,
+            rotation_angle_init=config.model.rotation_angle_init,
+            rotation_learnable=config.model.rotation_learnable,
+            rotation_init_mode=config.model.rotation_init_mode,
+            rotation_period=config.model.rotation_period,
+            use_action_rotation=config.model.use_action_rotation,
+            include_op_embedding_in_head=config.model.include_op_embedding_in_head,
         ).to(device)
     else:
         raise ValueError(
@@ -229,6 +291,21 @@ def main() -> None:
         },
         str(run_dir / "last.pt"),
     )
+    if config.run.eval_by_op and test_ops != config.data.ops:
+        load_fn: Any = getattr(torch, "load")
+        best_checkpoint = load_fn(str(run_dir / "best.pt"), map_location=device)
+        model.load_state_dict(best_checkpoint["model"])
+        per_op_stats = _evaluate_by_op(model, test_ops, config, criterion, device)
+        (run_dir / "per_op_metrics.json").write_text(json.dumps(per_op_stats, indent=2))
+        print("[per-op] op  micro_acc  macro_acc  loss")
+        for row in per_op_stats:
+            print(
+                "[per-op] "
+                f"{int(row['op']):>3}  "
+                f"{float(row['micro_acc']):.4f}     "
+                f"{float(row['macro_acc']):.4f}     "
+                f"{float(row['loss']):.4f}"
+            )
     ops_note = (
         f" (unseen ops: {test_ops})"
         if test_ops != config.data.ops

@@ -1,0 +1,36 @@
+data:
+  dataset: MNIST
+  ops: [1, -1]
+  test_ops: [2, 3, 4, 5, 6, 7, 8, -2, -3, -4, -5, -6, -7, -8]
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  name: simple_fc2
+  num_classes: 10
+  op_embed_dim: 32
+  mlp_hidden: 256
+  simple_encoder_depth: 2
+  # Kept for compatibility; the JEPA-like rotation path uses raw action values.
+  op_embedding_type: additive_embedding
+  predictor_type: block_rotation
+  rotation_angle_init: 0.6283185307179586
+  rotation_learnable: True
+  rotation_init_mode: cyclic_harmonics
+  rotation_period: 10
+  predictor_normalize: true
+  use_action_rotation: true
+  include_op_embedding_in_head: false
+
+optim:
+  lr: 1e-3
+  weight_decay: 1e-4
+
+run:
+  epochs: 20
+  seed: 42
+  runs_dir: runs/baseline
+  tag: simple-zero-shot-jepa
+  overfit: 0
+  eval_by_op: true

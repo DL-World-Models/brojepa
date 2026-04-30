@@ -101,7 +101,10 @@ class TestModelConfig:
         assert cfg.num_classes == 10
         assert cfg.op_embed_dim == 32
         assert cfg.mlp_hidden == 256
+        assert cfg.simple_encoder_depth == 1
         assert cfg.op_embedding_type == "embedding"
+        assert cfg.use_action_rotation is False
+        assert cfg.include_op_embedding_in_head is True
 
     def test_custom_initialization(self) -> None:
         """Test ModelConfig with custom values."""
@@ -110,12 +113,14 @@ class TestModelConfig:
             num_classes=20,
             op_embed_dim=64,
             mlp_hidden=512,
+            simple_encoder_depth=3,
             op_embedding_type="fourier",
         )
         assert cfg.name == "simple_fc"
         assert cfg.num_classes == 20
         assert cfg.op_embed_dim == 64
         assert cfg.mlp_hidden == 512
+        assert cfg.simple_encoder_depth == 3
         assert cfg.op_embedding_type == "fourier"
 
     def test_different_embedding_types(self) -> None:
@@ -152,6 +157,7 @@ class TestRunConfig:
         assert cfg.runs_dir == "runs/baseline"
         assert cfg.tag == "run"
         assert cfg.overfit == 0
+        assert cfg.eval_by_op is False
 
     def test_custom_initialization(self) -> None:
         """Test RunConfig with custom values."""
@@ -161,12 +167,14 @@ class TestRunConfig:
             runs_dir="runs/custom",
             tag="my-run",
             overfit=64,
+            eval_by_op=True,
         )
         assert cfg.epochs == 20
         assert cfg.seed == 123
         assert cfg.runs_dir == "runs/custom"
         assert cfg.tag == "my-run"
         assert cfg.overfit == 64
+        assert cfg.eval_by_op is True
 
 
 class TestExperimentConfig:
@@ -198,6 +206,8 @@ class TestExperimentConfig:
                 "name": "simple_fc",
                 "op_embed_dim": 64,
                 "op_embedding_type": "fourier",
+                "use_action_rotation": True,
+                "include_op_embedding_in_head": False,
             },
         }
         cfg = ExperimentConfig.from_dict(raw)
@@ -207,6 +217,8 @@ class TestExperimentConfig:
         assert cfg.model.name == "simple_fc"
         assert cfg.model.op_embed_dim == 64
         assert cfg.model.op_embedding_type == "fourier"
+        assert cfg.model.use_action_rotation is True
+        assert cfg.model.include_op_embedding_in_head is False
 
     def test_to_dict_preserves_values(self) -> None:
         """Test to_dict converts to dict correctly."""
@@ -290,6 +302,24 @@ class TestLoadExperimentConfig:
 
         with pytest.raises(ValueError, match="Config root must be a mapping"):
             load_experiment_config(config_file)
+
+    @pytest.mark.parametrize(
+        "config_path",
+        [
+            "configs/simple_zero_shot_linear.yaml",
+            "configs/simple_zero_shot_fourier.yaml",
+            "configs/resnet_zero_shot_linear.yaml",
+            "configs/resnet_zero_shot_fourier.yaml",
+            "configs/simple_zero_shot_jepa.yaml",
+            "configs/resnet_zero_shot_jepa.yaml",
+        ],
+    )
+    def test_zero_shot_configs_have_disjoint_ops(self, config_path: str) -> None:
+        """Test zero-shot configs do not overlap train and test operations."""
+        cfg = load_experiment_config(config_path)
+
+        assert cfg.data.test_ops is not None
+        assert set(cfg.data.ops).isdisjoint(cfg.data.test_ops)
 
 
 class TestApplyCliOverrides:

@@ -24,6 +24,7 @@ class ModelConfig:
     num_classes: int = 10
     op_embed_dim: int = 32
     mlp_hidden: int = 256
+    simple_encoder_depth: int = 1
     op_embedding_type: str = "embedding"  # "embedding", "linear", or "fourier"
 
     encoder_type: str = "cnn"  # "cnn", "mlp", or "vit"
@@ -48,6 +49,8 @@ class ModelConfig:
     rotation_learnable: bool = True
     rotation_init_mode: str = "constant"
     rotation_period: float = 10.0
+    use_action_rotation: bool = False
+    include_op_embedding_in_head: bool = True
 
     classifier_hidden_dim: int = 64
 
@@ -84,6 +87,7 @@ class RunConfig:
     runs_dir: str = "runs/baseline"
     tag: str = "run"
     overfit: int = 0
+    eval_by_op: bool = False
 
 
 @dataclass(slots=True)
@@ -117,6 +121,7 @@ class ExperimentConfig:
             num_classes=int(model_raw.get("num_classes", 10)),
             op_embed_dim=int(model_raw.get("op_embed_dim", 32)),
             mlp_hidden=int(model_raw.get("mlp_hidden", 256)),
+            simple_encoder_depth=int(model_raw.get("simple_encoder_depth", 1)),
             op_embedding_type=str(model_raw.get("op_embedding_type", "embedding")),
 
             encoder_type=str(model_raw.get("encoder_type", "cnn")),
@@ -139,6 +144,8 @@ class ExperimentConfig:
             rotation_learnable=bool(model_raw.get("rotation_learnable", True)),
             rotation_init_mode=str(model_raw.get("rotation_init_mode", "constant")),
             rotation_period=float(model_raw.get("rotation_period", 10.0)),
+            use_action_rotation=bool(model_raw.get("use_action_rotation", False)),
+            include_op_embedding_in_head=bool(model_raw.get("include_op_embedding_in_head", True)),
 
             classifier_hidden_dim=int(model_raw.get("classifier_hidden_dim", 64)),
             momentum=float(model_raw.get("momentum", 0.99)),
@@ -170,6 +177,7 @@ class ExperimentConfig:
             runs_dir=run_raw.get("runs_dir", "runs/baseline"),
             tag=run_raw.get("tag", "run"),
             overfit=int(run_raw.get("overfit", 0)),
+            eval_by_op=bool(run_raw.get("eval_by_op", False)),
         )
 
         # Backward-compatibility for earlier typoed top-level key.
@@ -213,6 +221,7 @@ def apply_cli_overrides(
         "num_classes": ("model", "num_classes"),
         "op_embed_dim": ("model", "op_embed_dim"),
         "mlp_hidden": ("model", "mlp_hidden"),
+        "simple_encoder_depth": ("model", "simple_encoder_depth"),
         "op_embedding_type": ("model", "op_embedding_type"),
         "encoder_type": ("model", "encoder_type"),
         "latent_dim": ("model", "latent_dim"),
@@ -223,6 +232,8 @@ def apply_cli_overrides(
         "rotation_learnable": ("model", "rotation_learnable"),
         "rotation_init_mode": ("model", "rotation_init_mode"),
         "rotation_period": ("model", "rotation_period"),
+        "use_action_rotation": ("model", "use_action_rotation"),
+        "include_op_embedding_in_head": ("model", "include_op_embedding_in_head"),
         "predictor_dropout": ("model", "predictor_dropout"),
         "predictor_normalize": ("model", "predictor_normalize"),
         "encoder_normalize": ("model", "encoder_normalize"),
@@ -246,6 +257,7 @@ def apply_cli_overrides(
         "runs_dir": ("run", "runs_dir"),
         "tag": ("run", "tag"),
         "overfit": ("run", "overfit"),
+        "eval_by_op": ("run", "eval_by_op"),
     }
 
     for key, value in overrides.items():
@@ -275,6 +287,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-classes", type=int, default=None)
     p.add_argument("--op-embed-dim", type=int, default=None)
     p.add_argument("--mlp-hidden", type=int, default=None)
+    p.add_argument("--simple-encoder-depth", type=int, default=None)
     p.add_argument("--op-embedding-type", type=str, default=None)
     p.add_argument("--encoder-type", type=str, default=None, choices=["mlp", "cnn", "vit"])
     p.add_argument("--latent-dim", type=int, default=None)
@@ -284,13 +297,22 @@ def parse_args() -> argparse.Namespace:
         "--predictor-type",
         type=str,
         default=None,
-        choices=["mlp", "residual", "scaled_residual", "linear_magnitude", "block_rotation"],
+        choices=[
+            "mlp",
+            "residual",
+            "scaled_residual",
+            "linear_magnitude",
+            "block_rotation",
+            "simple_rotation",
+        ],
     )
     p.add_argument("--residual-scale-init", type=float, default=None)
     p.add_argument("--rotation-angle-init", type=float, default=None)
     p.add_argument("--rotation-learnable", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--rotation-init-mode", type=str, default=None, choices=["constant", "cyclic_harmonics"])
     p.add_argument("--rotation-period", type=float, default=None)
+    p.add_argument("--use-action-rotation", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--include-op-embedding-in-head", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--predictor-dropout", type=float, default=None)
     p.add_argument("--predictor-normalize", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--use-vic-reg", action=argparse.BooleanOptionalAction, default=None)
@@ -314,4 +336,5 @@ def parse_args() -> argparse.Namespace:
         help="If > 0, train on a deterministic snapshot of N samples "
         "(sanity check that the model + loop can drive loss to ~0).",
     )
+    p.add_argument("--eval-by-op", action=argparse.BooleanOptionalAction, default=None)
     return p.parse_args()

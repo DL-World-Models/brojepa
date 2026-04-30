@@ -46,6 +46,76 @@ class TestSimpleFCLateFusion:
         assert model.net[0].in_features == 28 * 28 + 64
         assert model.net[0].out_features == 512
 
+    def test_model_with_pre_head_simple_rotation(self) -> None:
+        """Test simple rotation applies to image features before the head."""
+        ops = [1, 2, -1, -2]
+        model = SimpleFCLateFusion(
+            ops=ops,
+            num_classes=10,
+            predictor_type="simple_rotation",
+            predictor_normalize=False,
+            use_action_rotation=True,
+            include_op_embedding_in_head=False,
+        )
+        model.eval()
+
+        img = torch.randn(4, 1, 28, 28)
+        op_vals = torch.tensor([1.0, 2.0, -1.0, -2.0])
+
+        with torch.no_grad():
+            logits = model(img, op_vals)
+
+        assert logits.shape == (4, 10)
+        assert model.encoder[0].out_features == 256
+        assert model.classifier.in_features == 256
+        assert model.action_rotation.rotation_type == "simple_rotation"
+        assert model.action_rotation.rotation_angles is not None
+
+    def test_model_with_pre_head_block_rotation(self) -> None:
+        """Test block rotation applies to image features before the head."""
+        ops = [1, 2, -1, -2]
+        model = SimpleFCLateFusion(
+            ops=ops,
+            num_classes=10,
+            predictor_type="block_rotation",
+            predictor_normalize=False,
+            rotation_init_mode="cyclic_harmonics",
+            rotation_learnable=False,
+            use_action_rotation=True,
+            include_op_embedding_in_head=False,
+        )
+        model.eval()
+
+        img = torch.randn(4, 1, 28, 28)
+        op_vals = torch.tensor([1.0, 2.0, -1.0, -2.0])
+
+        with torch.no_grad():
+            logits = model(img, op_vals)
+
+        assert logits.shape == (4, 10)
+        assert model.encoder[0].out_features == 256
+        assert model.classifier.in_features == 256
+        assert model.action_rotation.rotation_type == "block_rotation"
+        assert model.action_rotation.rotation_angles.shape == (128,)
+
+    def test_model_with_deeper_split_encoder(self) -> None:
+        """Test the rotation path can use multiple encoder layers."""
+        ops = [1, 2, -1, -2]
+        model = SimpleFCLateFusion(
+            ops=ops,
+            num_classes=10,
+            simple_encoder_depth=3,
+            predictor_type="block_rotation",
+            use_action_rotation=True,
+            include_op_embedding_in_head=False,
+        )
+
+        linear_layers = [layer for layer in model.encoder if isinstance(layer, nn.Linear)]
+
+        assert len(linear_layers) == 3
+        assert linear_layers[0].in_features == 28 * 28
+        assert all(layer.out_features == 256 for layer in linear_layers)
+
     def test_model_device_movement(self) -> None:
         """Test that model parameters move correctly to device."""
         ops = [1, 2, -1, -2]
