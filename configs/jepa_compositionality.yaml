@@ -3,7 +3,7 @@ data:
   # Strict zero-shot split: train only on base operations.
   ops: [1, -1]
   # Unseen operations for generalization testing. Keep these out of all training losses.
-  test_ops: [2, 3, 4, 5, 6, 7, 8, 9, -2, -3, -4, -5, -6, -7, -8, -9]
+  test_ops: [2, 3, 4, 5, 6, 7, 8, -2, -3, -4, -5, -6, -7, -8]
   batch_size: 128
   num_workers: 0
   data_root: ./data

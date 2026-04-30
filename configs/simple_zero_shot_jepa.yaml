@@ -16,7 +16,7 @@ model:
   op_embedding_type: additive_embedding
   predictor_type: block_rotation
   rotation_angle_init: 0.6283185307179586
-  rotation_learnable: True
+  rotation_learnable: false
   rotation_init_mode: cyclic_harmonics
   rotation_period: 10
   predictor_normalize: true

@@ -5,6 +5,68 @@ import torch.nn as nn
 import pytest
 
 from models import ResNet18LateFusion, SimpleFCLateFusion
+from models.jepa_model import JepaPredictor
+from models.rotation import ActionRotation
+
+
+class TestActionRotation:
+    """Tests that baseline action rotation stays aligned with JEPA rotation."""
+
+    @pytest.mark.parametrize("normalize", [False, True])
+    def test_block_rotation_matches_jepa_predictor(self, normalize: bool) -> None:
+        torch.manual_seed(0)
+        latent_dim = 33
+        action_rotation = ActionRotation(
+            dim=latent_dim,
+            rotation_type="block_rotation",
+            init_mode="cyclic_harmonics",
+            period=10,
+            learnable=False,
+            normalize=normalize,
+        )
+        jepa_predictor = JepaPredictor(
+            latent_dim=latent_dim,
+            predictor_type="block_rotation",
+            rotation_init_mode="cyclic_harmonics",
+            rotation_period=10,
+            rotation_learnable=False,
+            normalize=normalize,
+        )
+        x = torch.randn(5, latent_dim)
+        actions = torch.tensor([1.0, 2.0, -3.0, 4.0, -5.0])
+
+        action_out = action_rotation(x, actions)
+        jepa_out = jepa_predictor(x, actions_embedded=torch.empty(5, 0), action_values=actions)
+
+        torch.testing.assert_close(action_rotation.rotation_angles, jepa_predictor.rotation_angles)
+        torch.testing.assert_close(action_out, jepa_out)
+
+    @pytest.mark.parametrize("normalize", [False, True])
+    def test_simple_rotation_matches_jepa_predictor(self, normalize: bool) -> None:
+        torch.manual_seed(0)
+        latent_dim = 33
+        action_rotation = ActionRotation(
+            dim=latent_dim,
+            rotation_type="simple_rotation",
+            angle_init=0.25,
+            learnable=False,
+            normalize=normalize,
+        )
+        jepa_predictor = JepaPredictor(
+            latent_dim=latent_dim,
+            predictor_type="simple_rotation",
+            rotation_angle_init=0.25,
+            rotation_learnable=False,
+            normalize=normalize,
+        )
+        x = torch.randn(5, latent_dim)
+        actions = torch.tensor([1.0, 2.0, -3.0, 4.0, -5.0])
+
+        action_out = action_rotation(x, actions)
+        jepa_out = jepa_predictor(x, actions_embedded=torch.empty(5, 0), action_values=actions)
+
+        torch.testing.assert_close(action_rotation.rotation_angles, jepa_predictor.rotation_angles)
+        torch.testing.assert_close(action_out, jepa_out)
 
 
 class TestSimpleFCLateFusion:
