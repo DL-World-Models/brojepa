@@ -32,7 +32,7 @@ model:
   predictor_type: "simple_rotation"
   residual_scale_init: 0.1
   rotation_angle_init: 0.6283185307179586
-  rotation_learnable: False
+  rotation_learnable: True
   rotation_init_mode: "constant"
   rotation_period: 10
   # Normalize predictor output to unit sphere for stable learning
@@ -50,7 +50,7 @@ model:
   lamda: 25
   miu: 5
   nu: 0.04
-  gamma: 0.1
+  gamma: 1 #0.1
 
   # === Composition Loss Settings ===
   # Disabled for the strict winner; no synthetic direct branches are trained.

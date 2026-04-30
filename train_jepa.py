@@ -324,8 +324,13 @@ def main():
         rollout_stats = None
         direct_knn_stats = None
         if test_ops != config.data.ops:
-            rollout_stats = rollout_evaluation(model, test_loader, device, config.data.ops,
-                                               test_ops, config.model.num_classes)
+            rollout_stats = rollout_evaluation(
+                model,
+                test_loader,
+                device,
+                config.data.ops,
+                config.model.num_classes,
+            )
             prototype_loader = seen_test_loader if seen_test_loader is not None else train_loader
             direct_knn_stats = direct_knn_evaluation(
                 model,
@@ -436,15 +441,19 @@ def main():
 
     # Compute final rollout evaluation for unseen operations
     if test_ops != config.data.ops:
-        rollout_accuracy = rollout_evaluation(model, test_loader, device,
-                                              config.data.ops, test_ops, config.model.num_classes)
+        rollout_accuracy = rollout_evaluation(
+            model,
+            test_loader,
+            device,
+            config.data.ops,
+            config.model.num_classes,
+        )
         print(f"=======Final Rollout test accuracy=============")
         for k, v in rollout_accuracy.items():
             print(f"{k}: {v}")
 
 if __name__ == "__main__":
     main()
-
 
 
 

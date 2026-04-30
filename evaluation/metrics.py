@@ -154,7 +154,6 @@ def rollout_evaluation(
         loader: DataLoader,
         device: torch.device,
         ops: Sequence[int],
-        test_ops: Sequence[int],
         num_classes: int,
 ) -> dict[str, float]:
     """
@@ -163,15 +162,13 @@ def rollout_evaluation(
     Tests if the model can recursively learn compositional relationships in addition:
     E.g., +3 = f(f(f(+1)+1)+1), -3 = f(f(f(-1)-1)-1)
     
-    To use this evaluation, the training ops must be unit addition [+1, -1] or [+2, -2]
-    and test_ops must be a scale*unit addition, e.g., [+3, -3] for unit addition[+1, -1]
-    and [+6, -6] for unit addition[+2, -2]
+    To use this evaluation, each action in the loader must be divisible by the
+    smallest non-zero training-op magnitude.
     
     Args:
         model: The JEPA model to evaluate
         loader: DataLoader with test data
         device: Device to run on
-        test_ops: Unseen operations to evaluate on
         num_classes: Number of classes
         
     Returns:

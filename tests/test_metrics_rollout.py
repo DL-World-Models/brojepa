@@ -98,7 +98,6 @@ def test_rollout_evaluation_handles_mixed_operation_magnitudes() -> None:
         loader=loader,
         device=torch.device("cpu"),
         ops=[1, -1],
-        test_ops=ops,
         num_classes=10,
     )
 
