@@ -22,6 +22,12 @@ model:
   predictor_normalize: true
   use_action_rotation: true
   include_op_embedding_in_head: false
+  # Baseline VICReg uses the variance/covariance terms on rotated features.
+  # These are the old effective weights from 0.01 * (25 * var + 1 * cov).
+  use_vic_reg: true
+  miu: 0.25
+  nu: 0.01
+  gamma: 1.0
 
 optim:
   lr: 1e-3

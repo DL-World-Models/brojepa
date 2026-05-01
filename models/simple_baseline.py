@@ -91,15 +91,25 @@ class SimpleFCLateFusion(nn.Module):
 				nn.Linear(mlp_hidden, num_classes),
 			)
 
-	def forward(self, img: torch.Tensor, op_vals: torch.Tensor) -> torch.Tensor:
+	def forward(
+		self,
+		img: torch.Tensor,
+		op_vals: torch.Tensor,
+		return_features: bool = False,
+	) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
 		img_flat = img.flatten(start_dim=1)
 		if not self.uses_split_path:
 			op_vec = self.op_embed(op_vals)
-			return self.net(torch.cat([img_flat, op_vec], dim=1))
+			fused = torch.cat([img_flat, op_vec], dim=1)
+			features = self.net[:2](fused)
+			logits = self.net[2](features)
+			return (logits, features) if return_features else logits
 
 		features = self.encoder(img_flat)
 		features = self.action_rotation(features, op_vals)
+		head_features = features
 		if self.include_op_embedding_in_head:
 			op_vec = self.op_embed(op_vals)
-			features = torch.cat([features, op_vec], dim=1)
-		return self.classifier(features)
+			head_features = torch.cat([features, op_vec], dim=1)
+		logits = self.classifier(head_features)
+		return (logits, features) if return_features else logits

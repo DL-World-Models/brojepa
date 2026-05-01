@@ -33,6 +33,7 @@ from tqdm import tqdm
 from data_pipeline import FixedSampleDataset, get_arithmetic_dataloader
 from utils.experiment_config import apply_cli_overrides, load_experiment_config, parse_args
 from models import ResNet18LateFusion, SimpleFCLateFusion
+from models.jepa_model import compute_covariance_reg, compute_variance_reg
 from utils.common import get_device, set_seed, build_run_dir, git_hash
 
 
@@ -48,12 +49,16 @@ def _run_epoch(
     acc_metric: MulticlassAccuracy,
     optimizer: torch.optim.Optimizer | None,
     desc: str,
+    use_vic_reg: bool = False,
+    vic_reg_miu: float = 25.0,
+    vic_reg_nu: float = 1.0,
+    vic_reg_gamma: float = 1.0,
 ) -> dict[str, float]:
     is_train = optimizer is not None
     model.train(is_train)
     acc_metric.reset()
 
-    total_loss, n = 0.0, 0
+    total_loss, total_cls_loss, total_vic_loss, n = 0.0, 0.0, 0.0, 0
     pbar: Any = tqdm(loader, desc=desc, leave=False)
     for batch in pbar:
         img = batch["ctx_img"].to(device, non_blocking=True)
@@ -61,8 +66,17 @@ def _run_epoch(
         tgt = batch["tgt_label"].to(device, non_blocking=True)
 
         with torch.set_grad_enabled(is_train):
-            logits = model(img, op)
-            loss = criterion(logits, tgt)
+            if use_vic_reg:
+                logits, features = model(img, op, return_features=True)
+                vic_loss = (
+                    vic_reg_miu * compute_variance_reg(features, gamma=vic_reg_gamma)
+                    + vic_reg_nu * compute_covariance_reg(features)
+                )
+            else:
+                logits = model(img, op)
+                vic_loss = logits.new_zeros(())
+            cls_loss = criterion(logits, tgt)
+            loss = cls_loss + vic_loss
             if is_train:
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -70,11 +84,18 @@ def _run_epoch(
 
         bs = tgt.size(0)
         total_loss += loss.item() * bs
+        total_cls_loss += cls_loss.item() * bs
+        total_vic_loss += vic_loss.item() * bs
         n += bs
         acc_metric.update(logits.detach(), tgt)
         pbar.set_postfix({"loss": f"{total_loss / n:.4f}"})
 
-    return {"loss": total_loss / max(n, 1), "acc": acc_metric.compute().item()}
+    return {
+        "loss": total_loss / max(n, 1),
+        "cls_loss": total_cls_loss / max(n, 1),
+        "vic_loss": total_vic_loss / max(n, 1),
+        "acc": acc_metric.compute().item(),
+    }
 
 
 def _evaluate_by_op(
@@ -251,6 +272,10 @@ def main() -> None:
             acc_metric,
             optimizer=optimizer,
             desc=f"epoch {epoch}/{config.run.epochs} train",
+            use_vic_reg=config.model.use_vic_reg,
+            vic_reg_miu=config.model.miu,
+            vic_reg_nu=config.model.nu,
+            vic_reg_gamma=config.model.gamma,
         )
         test_stats = _run_epoch(
             model,
@@ -260,11 +285,17 @@ def main() -> None:
             acc_metric,
             optimizer=None,
             desc=f"epoch {epoch}/{config.run.epochs}  eval",
+            use_vic_reg=config.model.use_vic_reg,
+            vic_reg_miu=config.model.miu,
+            vic_reg_nu=config.model.nu,
+            vic_reg_gamma=config.model.gamma,
         )
         print(
             f"[epoch {epoch:3d}] "
-            f"train loss={train_stats['loss']:.4f} acc={train_stats['acc']:.4f}  "
-            f"test loss={test_stats['loss']:.4f} acc={test_stats['acc']:.4f}"
+            f"train loss={train_stats['loss']:.4f} cls={train_stats['cls_loss']:.4f} "
+            f"vic={train_stats['vic_loss']:.4f} acc={train_stats['acc']:.4f}  "
+            f"test loss={test_stats['loss']:.4f} cls={test_stats['cls_loss']:.4f} "
+            f"vic={test_stats['vic_loss']:.4f} acc={test_stats['acc']:.4f}"
         )
         history.append({"epoch": epoch, "train": train_stats, "test": test_stats})
         (run_dir / "history.json").write_text(json.dumps(history, indent=2))

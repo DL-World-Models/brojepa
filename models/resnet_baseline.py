@@ -100,10 +100,17 @@ class ResNet18LateFusion(nn.Module):
             nn.Linear(mlp_hidden, num_classes),
         )
 
-    def forward(self, img: torch.Tensor, op_vals: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        img: torch.Tensor,
+        op_vals: torch.Tensor,
+        return_features: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         feats = self.encoder(img)  # [B, 512]
         feats = self.action_rotation(feats, op_vals)
+        rotation_features = feats
         if self.include_op_embedding_in_head:
             op_vec = self.op_embed(op_vals)  # [B, op_embed_dim]
             feats = torch.cat([feats, op_vec], dim=1)  # [B, 512 + op_embed_dim]
-        return self.head(feats)  # [B, num_classes]
+        logits = self.head(feats)  # [B, num_classes]
+        return (logits, rotation_features) if return_features else logits
