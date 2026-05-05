@@ -5,6 +5,68 @@ import torch.nn as nn
 import pytest
 
 from models import ResNet18LateFusion, SimpleFCLateFusion
+from models.jepa_model import JepaPredictor
+from models.rotation import ActionRotation
+
+
+class TestActionRotation:
+    """Tests that baseline action rotation stays aligned with JEPA rotation."""
+
+    @pytest.mark.parametrize("normalize", [False, True])
+    def test_block_rotation_matches_jepa_predictor(self, normalize: bool) -> None:
+        torch.manual_seed(0)
+        latent_dim = 33
+        action_rotation = ActionRotation(
+            dim=latent_dim,
+            rotation_type="block_rotation",
+            init_mode="cyclic_harmonics",
+            period=10,
+            learnable=False,
+            normalize=normalize,
+        )
+        jepa_predictor = JepaPredictor(
+            latent_dim=latent_dim,
+            predictor_type="block_rotation",
+            rotation_init_mode="cyclic_harmonics",
+            rotation_period=10,
+            rotation_learnable=False,
+            normalize=normalize,
+        )
+        x = torch.randn(5, latent_dim)
+        actions = torch.tensor([1.0, 2.0, -3.0, 4.0, -5.0])
+
+        action_out = action_rotation(x, actions)
+        jepa_out = jepa_predictor(x, actions_embedded=torch.empty(5, 0), action_values=actions)
+
+        torch.testing.assert_close(action_rotation.rotation_angles, jepa_predictor.rotation_angles)
+        torch.testing.assert_close(action_out, jepa_out)
+
+    @pytest.mark.parametrize("normalize", [False, True])
+    def test_simple_rotation_matches_jepa_predictor(self, normalize: bool) -> None:
+        torch.manual_seed(0)
+        latent_dim = 33
+        action_rotation = ActionRotation(
+            dim=latent_dim,
+            rotation_type="simple_rotation",
+            angle_init=0.25,
+            learnable=False,
+            normalize=normalize,
+        )
+        jepa_predictor = JepaPredictor(
+            latent_dim=latent_dim,
+            predictor_type="simple_rotation",
+            rotation_angle_init=0.25,
+            rotation_learnable=False,
+            normalize=normalize,
+        )
+        x = torch.randn(5, latent_dim)
+        actions = torch.tensor([1.0, 2.0, -3.0, 4.0, -5.0])
+
+        action_out = action_rotation(x, actions)
+        jepa_out = jepa_predictor(x, actions_embedded=torch.empty(5, 0), action_values=actions)
+
+        torch.testing.assert_close(action_rotation.rotation_angles, jepa_predictor.rotation_angles)
+        torch.testing.assert_close(action_out, jepa_out)
 
 
 class TestSimpleFCLateFusion:
@@ -45,6 +107,76 @@ class TestSimpleFCLateFusion:
 
         assert model.net[0].in_features == 28 * 28 + 64
         assert model.net[0].out_features == 512
+
+    def test_model_with_pre_head_simple_rotation(self) -> None:
+        """Test simple rotation applies to image features before the head."""
+        ops = [1, 2, -1, -2]
+        model = SimpleFCLateFusion(
+            ops=ops,
+            num_classes=10,
+            predictor_type="simple_rotation",
+            predictor_normalize=False,
+            use_action_rotation=True,
+            include_op_embedding_in_head=False,
+        )
+        model.eval()
+
+        img = torch.randn(4, 1, 28, 28)
+        op_vals = torch.tensor([1.0, 2.0, -1.0, -2.0])
+
+        with torch.no_grad():
+            logits = model(img, op_vals)
+
+        assert logits.shape == (4, 10)
+        assert model.encoder[0].out_features == 256
+        assert model.classifier.in_features == 256
+        assert model.action_rotation.rotation_type == "simple_rotation"
+        assert model.action_rotation.rotation_angles is not None
+
+    def test_model_with_pre_head_block_rotation(self) -> None:
+        """Test block rotation applies to image features before the head."""
+        ops = [1, 2, -1, -2]
+        model = SimpleFCLateFusion(
+            ops=ops,
+            num_classes=10,
+            predictor_type="block_rotation",
+            predictor_normalize=False,
+            rotation_init_mode="cyclic_harmonics",
+            rotation_learnable=False,
+            use_action_rotation=True,
+            include_op_embedding_in_head=False,
+        )
+        model.eval()
+
+        img = torch.randn(4, 1, 28, 28)
+        op_vals = torch.tensor([1.0, 2.0, -1.0, -2.0])
+
+        with torch.no_grad():
+            logits = model(img, op_vals)
+
+        assert logits.shape == (4, 10)
+        assert model.encoder[0].out_features == 256
+        assert model.classifier.in_features == 256
+        assert model.action_rotation.rotation_type == "block_rotation"
+        assert model.action_rotation.rotation_angles.shape == (128,)
+
+    def test_model_with_deeper_split_encoder(self) -> None:
+        """Test the rotation path can use multiple encoder layers."""
+        ops = [1, 2, -1, -2]
+        model = SimpleFCLateFusion(
+            ops=ops,
+            num_classes=10,
+            simple_encoder_depth=3,
+            predictor_type="block_rotation",
+            use_action_rotation=True,
+            include_op_embedding_in_head=False,
+        )
+
+        linear_layers = [layer for layer in model.encoder if isinstance(layer, nn.Linear)]
+
+        assert len(linear_layers) == 3
+        assert linear_layers[0].in_features == 28 * 28
+        assert all(layer.out_features == 256 for layer in linear_layers)
 
     def test_model_device_movement(self) -> None:
         """Test that model parameters move correctly to device."""

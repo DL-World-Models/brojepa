@@ -14,6 +14,7 @@ import torch.nn as nn
 from torchvision.models import resnet18
 
 from models.op_embedding import create_operation_embedding, OpEmbeddingType
+from models.rotation import ActionRotation
 
 
 def _build_mnist_resnet18() -> nn.Module:
@@ -57,24 +58,59 @@ class ResNet18LateFusion(nn.Module):
         op_embed_dim: int = 32,
         mlp_hidden: int = 256,
         op_embedding_type: OpEmbeddingType = "embedding",
+        predictor_type: str = "mlp",
+        predictor_normalize: bool = False,
+        rotation_angle_init: float = 0.6283185307179586,
+        rotation_learnable: bool = True,
+        rotation_init_mode: str = "constant",
+        rotation_period: float = 10.0,
+        use_action_rotation: bool = False,
+        include_op_embedding_in_head: bool = True,
     ) -> None:
         super().__init__()
 
         self.op_embedding_type = op_embedding_type
+        self.predictor_type = predictor_type
+        self.use_action_rotation = use_action_rotation
+        self.include_op_embedding_in_head = include_op_embedding_in_head
         self.encoder = _build_mnist_resnet18()
         self.op_embed = create_operation_embedding(
             embedding_type=op_embedding_type,
             op_embed_dim=op_embed_dim,
             ops=list(ops) if op_embedding_type == "embedding" else None,
         )
+        rotation_type = (
+            predictor_type
+            if use_action_rotation and predictor_type in {"block_rotation", "simple_rotation"}
+            else "none"
+        )
+        self.action_rotation = ActionRotation(
+            dim=self.FEAT_DIM,
+            rotation_type=rotation_type,
+            angle_init=rotation_angle_init,
+            learnable=rotation_learnable,
+            init_mode=rotation_init_mode,
+            period=rotation_period,
+            normalize=predictor_normalize,
+        )
+        head_in_dim = self.FEAT_DIM + op_embed_dim if include_op_embedding_in_head else self.FEAT_DIM
         self.head = nn.Sequential(
-            nn.Linear(self.FEAT_DIM + op_embed_dim, mlp_hidden),
+            nn.Linear(head_in_dim, mlp_hidden),
             nn.ReLU(inplace=True),
             nn.Linear(mlp_hidden, num_classes),
         )
 
-    def forward(self, img: torch.Tensor, op_vals: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        img: torch.Tensor,
+        op_vals: torch.Tensor,
+        return_features: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         feats = self.encoder(img)  # [B, 512]
-        op_vec = self.op_embed(op_vals)  # [B, op_embed_dim]
-        fused = torch.cat([feats, op_vec], dim=1)  # [B, 512 + op_embed_dim]
-        return self.head(fused)  # [B, num_classes]
+        feats = self.action_rotation(feats, op_vals)
+        rotation_features = feats
+        if self.include_op_embedding_in_head:
+            op_vec = self.op_embed(op_vals)  # [B, op_embed_dim]
+            feats = torch.cat([feats, op_vec], dim=1)  # [B, 512 + op_embed_dim]
+        logits = self.head(feats)  # [B, num_classes]
+        return (logits, rotation_features) if return_features else logits

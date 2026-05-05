@@ -17,6 +17,7 @@ The script writes all artifacts (config, history, best/last checkpoints) to
 reproducible given the saved config + git hash.
 """
 from typing import Any
+import sys
 from tqdm import tqdm
 import json
 
@@ -199,6 +200,7 @@ def main():
                 train_loader,
                 desc=f"warmup epoch {warmup_epoch}/{warmup_epochs}",
                 leave=False,
+                disable=not sys.stderr.isatty(),
             )
             for batch in pbar:
                 context_img = batch["ctx_img"].to(device, non_blocking=True)
@@ -258,7 +260,12 @@ def main():
         total_loss = 0
         jepa_loss, cls_loss, comp_loss = 0.0, 0.0, 0.0
         accuracy = 0
-        pbar: Any = tqdm(train_loader, desc=f'training epoch {epoch}', leave=False)
+        pbar: Any = tqdm(
+            train_loader,
+            desc=f'training epoch {epoch}',
+            leave=False,
+            disable=not sys.stderr.isatty(),
+        )
         for batch in pbar:
             context_img = batch["ctx_img"].to(device, non_blocking=True)
             target_img = batch["tgt_img"].to(device, non_blocking=True)
@@ -437,7 +444,18 @@ def main():
     )
     print(f"================Checking the latent metrics=============")
     for k, v in metrics.items():
-        print(f"{k}: {v}")
+        if torch.is_tensor(v):
+            if v.numel() == 1:
+                print(f"{k}: {v.item()}")
+            else:
+                print(
+                    f"{k}: shape={tuple(v.shape)} "
+                    f"mean={v.float().mean().item():.6f} "
+                    f"min={v.float().min().item():.6f} "
+                    f"max={v.float().max().item():.6f}"
+                )
+        else:
+            print(f"{k}: {v}")
 
     # Compute final rollout evaluation for unseen operations
     if test_ops != config.data.ops:
@@ -454,10 +472,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
 
 
 

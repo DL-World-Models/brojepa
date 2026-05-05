@@ -1,0 +1,26 @@
+data:
+  dataset: MNIST
+  ops: [-2, -1, 1, 2]
+  test_ops: [-4, -3, 3, 4]
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  name: simple_fc2
+  num_classes: 10
+  op_embed_dim: 32
+  mlp_hidden: 256
+  op_embedding_type: linear
+
+optim:
+  lr: 1e-3
+  weight_decay: 1e-4
+
+run:
+  epochs: 10
+  seed: 42
+  runs_dir: runs/baseline
+  tag: simple-zero-shot-linear
+  overfit: 0
+  eval_by_op: true
