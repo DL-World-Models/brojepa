@@ -7,7 +7,7 @@ MNIST arithmetic prediction with YAML configs.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+pip install -r requirements.txt
 ```
 
 ## Run
