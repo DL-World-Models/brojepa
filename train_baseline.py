@@ -22,6 +22,7 @@ reproducible given the saved config + git hash.
 """
 
 import json
+import sys
 from typing import Any
 
 import torch
@@ -59,7 +60,7 @@ def _run_epoch(
     acc_metric.reset()
 
     total_loss, total_cls_loss, total_vic_loss, n = 0.0, 0.0, 0.0, 0
-    pbar: Any = tqdm(loader, desc=desc, leave=False)
+    pbar: Any = tqdm(loader, desc=desc, leave=False, disable=not sys.stderr.isatty())
     for batch in pbar:
         img = batch["ctx_img"].to(device, non_blocking=True)
         op = batch["op"].to(device, non_blocking=True)
@@ -143,6 +144,46 @@ def _evaluate_by_op(
     return rows
 
 
+@torch.no_grad()
+def _knn_evaluation(
+    model: nn.Module,
+    prototype_loader: DataLoader[dict[str, torch.Tensor]],
+    eval_loader: DataLoader[dict[str, torch.Tensor]],
+    device: torch.device,
+    num_classes: int,
+) -> dict[str, float]:
+    """Classify baseline features by nearest seen-op class prototype."""
+    model.eval()
+    features_by_class: dict[int, list[torch.Tensor]] = {i: [] for i in range(num_classes)}
+
+    for batch in prototype_loader:
+        img = batch["ctx_img"].to(device, non_blocking=True)
+        op = batch["op"].to(device, non_blocking=True)
+        labels = batch["tgt_label"].to(device, non_blocking=True)
+        _, features = model(img, op, return_features=True)
+
+        for label in labels.unique():
+            label_int = int(label.item())
+            features_by_class[label_int].append(features[labels == label_int])
+
+    prototypes = torch.stack(
+        [torch.cat(features_by_class[i], dim=0).mean(dim=0) for i in range(num_classes)]
+    )
+
+    correct = 0
+    total = 0
+    for batch in eval_loader:
+        img = batch["ctx_img"].to(device, non_blocking=True)
+        op = batch["op"].to(device, non_blocking=True)
+        labels = batch["tgt_label"].to(device, non_blocking=True)
+        _, features = model(img, op, return_features=True)
+        pred = torch.cdist(features, prototypes).argmin(dim=1)
+        correct += int((pred == labels).sum().item())
+        total += int(labels.numel())
+
+    return {"knn_acc": correct / max(total, 1)}
+
+
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
@@ -185,6 +226,16 @@ def main() -> None:
         data_root=config.data.data_root,
         num_workers=config.data.num_workers,
     )
+    seen_test_loader = None
+    if test_ops != config.data.ops:
+        seen_test_loader = get_arithmetic_dataloader(
+            dataset_name=config.data.dataset,
+            batch_size=config.data.batch_size,
+            ops=config.data.ops,
+            is_train=False,
+            data_root=config.data.data_root,
+            num_workers=config.data.num_workers,
+        )
 
     if config.run.overfit > 0:
         snap = FixedSampleDataset(train_loader.dataset, config.run.overfit)
@@ -201,6 +252,7 @@ def main() -> None:
             shuffle=False,
             num_workers=config.data.num_workers,
         )
+        seen_test_loader = test_loader
         print(f"[overfit] snapshotted {config.run.overfit} samples (train == eval set)")
 
     # ---- model / optim ---- #
@@ -297,7 +349,8 @@ def main() -> None:
             f"test loss={test_stats['loss']:.4f} cls={test_stats['cls_loss']:.4f} "
             f"vic={test_stats['vic_loss']:.4f} acc={test_stats['acc']:.4f}"
         )
-        history.append({"epoch": epoch, "train": train_stats, "test": test_stats})
+        epoch_record = {"epoch": epoch, "train": train_stats, "test": test_stats}
+        history.append(epoch_record)
         (run_dir / "history.json").write_text(json.dumps(history, indent=2))
 
         if test_stats["acc"] > best_test_acc:
@@ -326,6 +379,69 @@ def main() -> None:
         load_fn: Any = getattr(torch, "load")
         best_checkpoint = load_fn(str(run_dir / "best.pt"), map_location=device)
         model.load_state_dict(best_checkpoint["model"])
+        best_train_stats = _run_epoch(
+            model,
+            train_loader,
+            criterion,
+            device,
+            acc_metric,
+            optimizer=None,
+            desc="best checkpoint train eval",
+            use_vic_reg=config.model.use_vic_reg,
+            vic_reg_miu=config.model.miu,
+            vic_reg_nu=config.model.nu,
+            vic_reg_gamma=config.model.gamma,
+        )
+        best_seen_stats = None
+        if seen_test_loader is not None:
+            best_seen_stats = _run_epoch(
+                model,
+                seen_test_loader,
+                criterion,
+                device,
+                acc_metric,
+                optimizer=None,
+                desc="best checkpoint seen-op eval",
+                use_vic_reg=config.model.use_vic_reg,
+                vic_reg_miu=config.model.miu,
+                vic_reg_nu=config.model.nu,
+                vic_reg_gamma=config.model.gamma,
+            )
+        best_knn_stats = None
+        if seen_test_loader is not None:
+            best_knn_stats = _knn_evaluation(
+                model,
+                seen_test_loader,
+                test_loader,
+                device,
+                config.model.num_classes,
+            )
+        best_metrics = {
+            "epoch": int(best_checkpoint["epoch"]),
+            "train": best_train_stats,
+            "seen_ops": best_seen_stats,
+            "test": {
+                "acc": float(best_checkpoint["test_acc"]),
+            },
+            "direct_knn": best_knn_stats,
+        }
+        (run_dir / "best_metrics.json").write_text(json.dumps(best_metrics, indent=2))
+        print(
+            "[best-metrics] "
+            f"epoch={best_metrics['epoch']} "
+            f"train_acc={best_train_stats['acc']:.4f} "
+            + (
+                f"seen_acc={best_seen_stats['acc']:.4f} "
+                if best_seen_stats is not None
+                else ""
+            )
+            + f"zero_acc={float(best_checkpoint['test_acc']):.4f} "
+            + (
+                f"direct_knn={best_knn_stats['knn_acc']:.4f}"
+                if best_knn_stats is not None
+                else ""
+            )
+        )
         per_op_stats = _evaluate_by_op(model, test_ops, config, criterion, device)
         (run_dir / "per_op_metrics.json").write_text(json.dumps(per_op_stats, indent=2))
         print("[per-op] op  micro_acc  macro_acc  loss")
