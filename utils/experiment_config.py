@@ -289,7 +289,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mlp-hidden", type=int, default=None)
     p.add_argument("--simple-encoder-depth", type=int, default=None)
     p.add_argument("--op-embedding-type", type=str, default=None)
-    p.add_argument("--encoder-type", type=str, default=None, choices=["mlp", "cnn", "vit"])
+    p.add_argument("--encoder-type", type=str, default=None, choices=["mlp", "cnn", "vit", "resnet", "resnet18"])
     p.add_argument("--latent-dim", type=int, default=None)
     p.add_argument("--encoder-hidden-dim", type=int, default=None)
     p.add_argument("--encoder-normalize", action=argparse.BooleanOptionalAction, default=None)
