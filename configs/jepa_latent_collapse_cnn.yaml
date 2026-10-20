@@ -1,0 +1,80 @@
+data:
+  dataset: MNIST
+#<<<<<<< Updated upstream
+ # ops: [1, 2, 3, -1, -2, -3] #, +5, -5, +6, -6, +7, -7, +8, -8, +9, -9]
+ # test_ops: [+4, -4]  # Subset of seen ops for embedding mode
+#=======
+  ops: [1, -1] #, -2, +2, +4, -4] #, +5, -5, +6, -6, +7, -7, +8, -8, +9, -9]
+  test_ops: [+3, -3]  # Subset of seen ops for embedding mode
+#>>>>>>> Stashed changes
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  # for action embedding
+  op_embed_dim: 32
+  op_embedding_type: "hybrid" #'linear'
+
+  # for encoder
+  encoder_type:  'cnn' # 'mlp', 'vit'
+  latent_dim: 64
+
+  # for 'mlp' or 'cnn' encoder
+  encoder_normalize: True # False
+  activation: 'relu'
+  encoder_hidden_dim: 256
+
+  # for ViTEncoder
+  patch_size: 7
+  d_model: 128
+  depth: 4
+  nhead: 4
+  mlp_dim: 256
+  use_cls_token: True #False
+
+  # for JepaPredictor:
+  predictor_dropout: 0.2
+  predictor_hidden_dim: [256, 256]
+  predictor_normalize: True
+  predictor_type: 'mlp' # "mlp", "residual", "scaled_residual", "linear_magnitude", "block_rotation",
+
+
+
+  # for Classification_head
+  classifier_hidden_dim: 64
+  num_classes: 10
+
+  # EMA update rate for targe_encoder
+  momentum: 0.99 #0.9996
+
+  # for VIC_reg, the parameter values are taken from paper Bardes's VICReg paper (ICLR 2022)
+  use_vic_reg: False #True
+  lamda: 25  # weight for invariance reg, i.e. L2 loss between predicted and target latent
+  miu: 25   # weight for variance reg
+  nu: 1.0   # weight for covariance reg
+  gamma: 1.0   # The hinge loss threshold for variance_reg
+
+optim:
+  lr: 1e-4
+  weight_decay: 0
+  # weight for classification supervision, if zero is passed, 
+  # the classification gradient will not be backpropagated, but the cls_loss will still be computed and logged for diagnostics
+  # classification head is still trained to check the quality of the learned representation, but it won't influence the representation learning process
+  cls_weight: 0
+
+
+run:
+  # Classification warmup before JEPA phase.
+  warmup_epochs: 0
+  warmup_lr: 1e-4  # null to reuse optim.lr
+  freeze_context_post_warmup: False #True  # freeze context encoder after warmup completes
+  epochs: 10
+  seed: 42
+  runs_dir: runs/jepa
+  tag: test
+#  lr: 1e-3
+#  weight_decay: 1e-4
+#  cls_weight: 1.0 # weight for classification supervision
+
+

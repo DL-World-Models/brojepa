@@ -1,0 +1,25 @@
+data:
+  dataset: MNIST
+  ops: [1, 2, -1, -2]
+  test_ops: [-1, -2]  # Subset of seen ops for embedding mode
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  name: resnet18
+  num_classes: 10
+  op_embed_dim: 32
+  mlp_hidden: 256
+  op_embedding_type: embedding
+
+optim:
+  lr: 0.001
+  weight_decay: 0.0001
+
+run:
+  epochs: 10
+  seed: 42
+  runs_dir: runs/baseline
+  tag: resnet-baseline
+  overfit: 0

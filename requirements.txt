@@ -1,0 +1,6 @@
+# Runtime dependencies for the mnist-math research codebase.
+torch>=2.3
+torchvision>=0.18
+torchmetrics>=1.4
+tqdm>=4.66
+PyYAML>=6.0

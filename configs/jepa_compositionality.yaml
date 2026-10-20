@@ -1,0 +1,77 @@
+data:
+  dataset: MNIST
+  # Strict zero-shot split: train only on base operations.
+  ops: [1, -1]
+  # Unseen operations for generalization testing. Keep these out of all training losses.
+  test_ops: [2, 3, 4, 5, 6, 7, 8, -2, -3, -4, -5, -6, -7, -8]
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  # Dimension of operation embeddings
+  op_embed_dim: 32
+  # Kept for compatibility; block_rotation uses the raw action value directly.
+  op_embedding_type: "additive_embedding"
+
+  # Encoder selection: 'mlp', 'cnn', or 'vit'
+  encoder_type: 'mlp'
+  # Latent dimension for context and target encodings
+  latent_dim: 32
+
+  # MLP / CNN encoder options
+  encoder_normalize: True
+  activation: 'relu'
+  encoder_hidden_dim: 256
+
+  # JEPA predictor settings
+  predictor_dropout: 0.2
+  predictor_hidden_dim: [256, 256]
+  # Direct group-action predictor: z_next = R(op) z in one forward pass.
+  predictor_type: "block_rotation"
+  residual_scale_init: 0.1
+  rotation_angle_init: 0.6283185307179586
+  rotation_learnable: False
+  rotation_init_mode: "cyclic_harmonics"
+  rotation_period: 10
+  # Normalize predictor output to unit sphere for stable learning
+  predictor_normalize: True
+
+  # Classification head (auxiliary supervision)
+  classifier_hidden_dim: 64
+  num_classes: 10
+
+  # EMA update rate for target encoder
+  momentum: 0.99
+
+  # VICReg-style regularizer settings. gamma is small because latents are unit-normalized.
+  use_vic_reg: True
+  lamda: 25
+  miu: 5
+  nu: 0.04
+  gamma: 0.1
+
+  # === Composition Loss Settings ===
+  # Disabled for the strict winner; no synthetic direct branches are trained.
+  use_composition_loss: False
+  composition_lambda: 0.0
+  composition_ops: [2, -2]
+  composition_detach_teacher: True
+
+optim:
+  lr: 1e-4
+  weight_decay: 0
+  # Weight for classification supervision (0 disables gradient contribution to predictor)
+  cls_weight: 0.0
+
+run:
+  # Classification warmup before JEPA phase (disabled for compositionality experiments)
+  warmup_epochs: 0
+  warmup_lr: 1e-4
+  freeze_context_post_warmup: False
+  # Strict block-rotation run peaked at direct zero-shot acc ~= 97.15%.
+  epochs: 14
+  seed: 42
+  # Directory and tag for saving run artifacts
+  runs_dir: runs/jepa
+  tag: strict_blockrot_fixedharm_vic

@@ -1,0 +1,42 @@
+data:
+  dataset: MNIST
+  ops: [1, -1]
+  test_ops: [2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8]
+  batch_size: 128
+  num_workers: 0
+  data_root: ./data
+
+model:
+  op_embed_dim: 32
+  op_embedding_type: additive_embedding
+  encoder_type: resnet18
+  latent_dim: 64
+  encoder_normalize: true
+  activation: relu
+  encoder_hidden_dim: 256
+  predictor_dropout: 0.2
+  predictor_hidden_dim: [256, 256]
+  predictor_normalize: true
+  predictor_type: mlp
+  classifier_hidden_dim: 64
+  num_classes: 10
+  momentum: 0.99
+  use_vic_reg: false
+  use_composition_loss: true
+  composition_lambda: 0.01
+  composition_ops: [2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7, 8, -8]
+  composition_detach_teacher: true
+
+optim:
+  lr: 1e-4
+  weight_decay: 0
+  cls_weight: 0.0
+
+run:
+  warmup_epochs: 0
+  warmup_lr: 1e-4
+  freeze_context_post_warmup: false
+  epochs: 25
+  seed: 42
+  runs_dir: runs/experiment
+  tag: resnet-additive-jepa-cc
